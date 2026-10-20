@@ -4,6 +4,7 @@
     kvleak --since 7d            last week only
     kvleak --html report.html    shareable report
     kvleak session <id>          step-by-step timeline of one session
+    kvleak advise                compact or hand off now? (newest session)
     kvleak breakeven 150k        should I keep this cache alive?
     kvleak statusline --install  live TTL countdown in Claude Code
     kvleak pointer build.log     compact hand-off message for multi-agent boards
@@ -29,7 +30,7 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
-SUBCOMMANDS = {"audit", "session", "breakeven", "statusline", "pointer", "models"}
+SUBCOMMANDS = {"audit", "session", "advise", "breakeven", "statusline", "pointer", "models"}
 
 
 # ------------------------------------------------------------------------- helpers
@@ -108,6 +109,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 def cmd_audit(args) -> int:
     transcripts = load_all(_default_paths(args), args.format, args.since, args.project)
     report = analyze(transcripts, args.min_miss, args.top)
+    if not args.path and not args.project and not args.since:
+        _save_profile(transcripts, report)
     wrote_file = False
     if args.html:
         from .htmlreport import render_html
@@ -129,6 +132,85 @@ def cmd_audit(args) -> int:
         print(render_terminal(report, args.top_misses))
     if args.fail_over is not None and report.cost and report.leak / report.cost * 100 > args.fail_over:
         return 2
+    return 0
+
+
+def _save_profile(transcripts: List[Transcript], report) -> None:
+    from .advisor import Profile
+
+    inter = [t for t in transcripts if t.is_subagent or len(t.steps) >= 5]
+    calls = sum(len(t.steps) for t in inter)
+    misses = sum(1 for m in report.misses if m.cause not in ("cold_start", "subagent_cold_start"))
+    Profile.from_transcripts(inter, misses, calls).save()
+
+
+def _profile(args):
+    from .advisor import Profile
+
+    prof = Profile.load()
+    if not prof.lengths:  # first run: learn from history once, then reuse
+        transcripts = load_all(_default_paths(args), args.format, None, None)
+        _save_profile(transcripts, analyze(transcripts, args.min_miss, 0))
+        prof = Profile.load()
+    return prof
+
+
+def cmd_advise(args) -> int:
+    from .advisor import advise_steps, backtest
+
+    c = fmt.c
+    if args.backtest:
+        transcripts = load_all(_default_paths(args), args.format, args.since, args.project)
+        prof = _profile(args)
+        print(c("\n  Backtest: compact whenever the advisor says it pays (context ≥ {})".format(fmt.tok(args.min_context)), "bold"))
+        rows = [["compact above", "compactions", "input spend", "saved", "share"]]
+        for mc in sorted({args.min_context, 200_000, 400_000}):
+            b = backtest(transcripts, prof, price_for, mc)
+            rows.append([fmt.tok(mc), str(b["compactions_suggested"]), fmt.usd(b["input_cost_usd"]),
+                         c(fmt.usd(b["saved_usd"]), "green"), fmt.pct(b["saved_pct"])])
+        print(fmt.table(rows, "rrrrr"))
+        print(c("\n  Money only: assumes the summary keeps what the rest of the session needs.", "grey"))
+        return 0
+    paths = _default_paths(args)
+    if args.id:
+        path = _find_session(paths, args.id)
+    else:
+        files = [f for f in discover(paths) if "/subagents/" not in f.replace(os.sep, "/")]
+        path = max(files, key=os.path.getmtime) if files else None
+    if not path:
+        print("kvleak: no transcript found", file=sys.stderr)
+        return 1
+    t = load(path, args.format)
+    if not t.steps:
+        print("kvleak: no billed calls in {}".format(path), file=sys.stderr)
+        return 1
+    price = price_for(t.steps[-1].model)
+    a = advise_steps(t.steps, price, _profile(args), min_context=args.min_context)
+    money = (lambda x: fmt.usd(price.usd(x))) if price.input_per_mtok else (lambda x: fmt.tok(x) + " tok")
+    print(c("\n  {} · {} · {}".format(t.session_id[:8], t.project, t.steps[-1].model), "bold"))
+    print("  Context now          {}  (+{}/call)".format(fmt.tok(a.context), fmt.tok(a.growth_per_call)))
+    print("  Carrying it costs    {} per call (cache read + {}% miss risk)".format(
+        money(a.per_call_now), round(100 * _profile(args).miss_rate, 1)))
+    print("  Calls so far         {}  ·  expected still to come ≈ {:.0f} (from your history)".format(
+        a.calls_so_far, a.expected_remaining))
+    print()
+    rows = [["option", "new context", "one-time cost", "pays off after", "expected saving"]]
+    rows.append(["/compact", fmt.tok(a.compact_to), money(a.compact_cost),
+                 "{:.1f} calls".format(a.compact_breakeven), money(a.compact_saving)])
+    rows.append(["hand-off doc + new session", fmt.tok(a.handoff_to), money(a.handoff_cost),
+                 "{:.1f} calls".format(a.handoff_breakeven), money(a.handoff_saving)])
+    print(fmt.table(rows, "lrrrr"))
+    print()
+    if a.best == "compact":
+        print("  " + c("→ Run /compact now.", "green", "bold") + " It pays for itself in {:.0f} calls.".format(a.compact_breakeven))
+    elif a.best == "handoff":
+        print("  " + c("→ Write a short hand-off doc and start a fresh session", "green", "bold")
+              + " (or /compact; both pay off within {:.0f} calls).".format(max(a.compact_breakeven, a.handoff_breakeven)))
+    elif a.context < args.min_context:
+        print("  " + c("→ Keep going.", "bold") + " Context is under {}; not worth losing detail yet.".format(fmt.tok(args.min_context)))
+    else:
+        print("  " + c("→ Keep going.", "bold") + " The session is likely too close to its end for compaction to pay off.")
+    print(c("  Money only: compact when the summary would still carry what you need.", "grey"))
     return 0
 
 
@@ -305,6 +387,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("id", help="session id (prefix ok) or transcript path")
     s.add_argument("--misses-only", action="store_true")
     s.set_defaults(func=cmd_session)
+
+    ad = sub.add_parser("advise", help="should I /compact or hand off now? (newest session by default)")
+    _add_common(ad)
+    ad.add_argument("id", nargs="?", help="session id (prefix ok) or transcript path")
+    ad.add_argument("--min-context", type=parse_tokens, default=100_000, metavar="TOKENS",
+                    help="never suggest compacting below this context size (default 100k)")
+    ad.add_argument("--backtest", action="store_true", help="replay your history with the advisor in the loop")
+    ad.set_defaults(func=cmd_advise)
 
     b = sub.add_parser("breakeven", help="keep-alive vs. rebuild calculator")
     b.add_argument("tokens", type=parse_tokens, help="cached prefix size, e.g. 150k")

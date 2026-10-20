@@ -35,6 +35,7 @@ class Price:
     read_mult: float = DEFAULT_READ
     write_5m_mult: float = WRITE_5M
     write_1h_mult: float = WRITE_1H
+    output_mult: float = 5.0  # output price / input price (5x for every current Claude model)
 
     def usd(self, base_equiv_tokens: float) -> Optional[float]:
         if self.input_per_mtok is None:
@@ -50,6 +51,9 @@ class Price:
         """
         write = self.write_1h_mult if ttl_seconds >= TTL_1H else self.write_5m_mult
         return int((write - self.read_mult) / self.read_mult + 1e-9)
+
+    def write_mult(self, ttl_seconds: int) -> float:
+        return self.write_1h_mult if ttl_seconds >= TTL_1H else self.write_5m_mult
 
 
 # Longest matching key wins, so "claude-opus-5-5" beats "claude-opus".
@@ -96,6 +100,7 @@ def _load_overrides() -> Dict[str, Price]:
                 read_mult=cfg.get("read_mult", DEFAULT_READ),
                 write_5m_mult=cfg.get("write_5m_mult", WRITE_5M),
                 write_1h_mult=cfg.get("write_1h_mult", WRITE_1H),
+                output_mult=cfg.get("output_mult", 5.0),
             )
     return out
 

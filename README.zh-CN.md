@@ -20,6 +20,7 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 - 其中 **82%** 的漏损来自空闲间隔（中位数 2.8 小时；Claude Code 现在默认使用 1 小时 TTL）
 - 200k 上下文一次未命中的成本：Fable 5.1 上 **$3.95**，Opus 5.5 上 $1.56
 - 6 个 Worker 的 Swarm 模拟：指针交接 + 常驻 Worker + 锁定模型，输入成本 **−86%**
+- 压缩顾问回测：只在上下文超过 400k 时压缩，30 天里只压缩 **10** 次，输入花费 **−63%**
 
 ## 功能
 
@@ -29,9 +30,20 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 | `kvleak --since 7d --html report.html` | 生成可分享的自包含 HTML 报告（亦支持 `--markdown` / `--json`） |
 | `kvleak session <id>` | 单个会话逐步时间线，标出每一次未命中及原因 |
 | `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89` |
+| `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
 | `kvleak breakeven 150k --idle 20m` | 保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
 | `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
 | `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
+
+## 上下文太大，什么时候该压缩？
+
+有缓存，长上下文也不是免费的：每次调用都要按读取价把整段前缀读一遍，一旦未命中还要全量重建。压缩只花一次钱，之后每次调用都更便宜：
+
+```
+回本调用次数 R* = 一次性成本 / ((C − S) · (read + 未命中率 · (write − read)))
+```
+
+`kvleak advise` 会用你的历史数据估计会话通常还会持续多少次调用、多久未命中一次，然后告诉你现在压缩或换新会话是否划算。状态栏也会实时提示：`⚠ /compact saves ~$9.42`。这些结论只算钱：请在摘要仍能保留后续所需信息时再压缩。
 
 ## 未命中原因分类
 

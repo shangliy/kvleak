@@ -62,6 +62,7 @@ No API key, no config, no network calls, no dependencies. It reads
 | Share of that leak caused by idle gaps | **82%** (median gap 2.8 h; Claude Code now uses the 1 h TTL) |
 | Cost of one miss on a 200k context | **$3.95** on Fable 5.1, $1.56 on Opus 5.5 (1 h TTL) |
 | 6-worker swarm, pointers + warm workers + pinned models | **−86%** input cost in simulation |
+| Compaction advisor replayed on real history (compact only above 400k) | **−63%** input spend with **10** compactions in 30 days |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -75,6 +76,7 @@ Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 | `kvleak --since 7d --html report.html` | A self-contained HTML report (light/dark, no JS) you can share with your team. `--markdown` and `--json` also work. |
 | `kvleak session <id>` | Call-by-call timeline of one session, with each miss flagged and explained. |
 | `kvleak statusline --install` | Adds a live **cache TTL countdown** to Claude Code: `◕ cache 3:41 · 182k ctx · rebuild $0.89`. |
+| `kvleak advise` | Tells you whether to **`/compact` or hand off to a fresh session now**, and when that pays for itself. `--backtest` replays your history with the advisor in the loop. |
 | `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die. |
 | `kvleak pointer build.log --status FAIL` | Turns a huge file into a ~60-token hand-off message for multi-agent boards. |
 | `kvleak --fail-over 15` | Exits with code 2 when more than 15% of input spend leaked, so it can gate CI or nightly jobs. |
@@ -108,6 +110,43 @@ kvleak statusline --install      # backs up settings.json; refuses to overwrite 
 When the ring is almost empty, sending your next message *now* refreshes the
 TTL at the cost of a cache read. If you already have a statusline script, call
 `kvleak statusline` from it; it reads the same JSON on stdin.
+
+## When is a big context costing more than it saves?
+
+Caching makes a long context cheap, but not free. Every call re-reads the whole
+prefix at the cache-read price, and every miss rebuilds all of it. So a 400k-token
+session costs you on *every* call. Compacting costs money once and makes every
+later call cheaper:
+
+```
+pays off after  R* = one-time cost / ((C − S) · (read + miss_rate · (write − read)))  calls
+```
+
+`kvleak advise` fills that in for your newest session. It learns how long your
+sessions usually run, and how often they miss, from your own history:
+
+```text
+$ kvleak advise
+
+  933c7e07 · my-project · claude-opus-5-5
+  Context now          207k  (+1.0k/call)
+  Carrying it costs    $0.077 per call (cache read + 2.2% miss risk)
+  Calls so far         106  ·  expected still to come ≈ 130 (from your history)
+
+  option                      new context  one-time cost  pays off after  expected saving
+  /compact                          33.0k         $0.265       4.1 calls            $8.20
+  hand-off doc + new session        28.0k         $0.125       1.9 calls            $8.58
+
+  → Write a short hand-off doc and start a fresh session (or /compact; both pay off within 4 calls).
+```
+
+The statusline shows the same advice live: `● cache 59:47 · 249k ctx · rebuild $1.99 · ⚠ /compact saves ~$9.42`.
+
+In a backtest on 30 days of real sessions, an advisor that only knew the past
+would have cut input spend by **63%** while compacting just **10 times** (only
+above 400k context). See [docs/benchmarks.md](docs/benchmarks.md#4-backtest-compaction-advisor).
+These numbers cover money only. Compact when the summary would still carry what
+the rest of the session needs.
 
 ## Should I keep this cache alive?
 

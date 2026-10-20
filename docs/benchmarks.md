@@ -1,6 +1,6 @@
 # Numbers
 
-Three sets of numbers, each labelled by where it comes from. Re-run all of them
+Four sets of numbers, each labelled by where it comes from. Re-run all of them
 yourself; every command is on this page.
 
 ## 1. Case study: 30 days of one heavy Claude Code user
@@ -83,3 +83,25 @@ build log (~8k tokens) is produced per round. Prices are Opus 5.5 with a
 
 The board change alone removes most of the O(N²) broadcast cost, because one
 pasted log is re-read by every worker on every later turn.
+
+## 4. Backtest: compaction advisor
+
+`kvleak advise --backtest` replays the same 30 days of interactive sessions
+(33 main sessions). At every call the advisor sees only the past. When it says
+compacting pays, the session is compacted at that point, and every later call
+is re-priced with the smaller context at what that call really paid per token.
+
+| compact only above | compactions in 30 days | input spend | saved | share |
+|---:|---:|---:|---:|---:|
+| 100k | 119 | $1,272 | $1,008 | 80.6% |
+| 200k | 39 | $1,272 | $933 | 74.9% |
+| **400k** | **10** | $1,272 | **$778** | **63.2%** |
+
+Why it's so large: with caching, the bill is dominated by *re-reading* huge
+contexts. A 450k context on Opus 5.5 costs about $0.17 per call just to carry,
+counting cache reads plus a 2% miss risk at the 1-hour write price. Compacting
+it costs about $0.31 once and pays off after **2 calls**.
+
+> This counts money only. It assumes the summary keeps what the rest of the
+> session needs. In practice, compact at natural breaks: after a feature lands,
+> before switching tasks, or when the statusline shows `⚠ /compact saves ~$X`.

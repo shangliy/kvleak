@@ -61,6 +61,33 @@ saving   = leak − pings · rebuilt · read_mult   if pings ≤ K_max else 0
 
 The sum of these savings is the **Recoverable** line in the report.
 
+## 6. Compaction advisor (`kvleak advise`)
+
+Carrying a context of `C` tokens for one more call costs `C · r_eff`, where
+`r_eff = read + m · (write − read)` and `m` is your historical rate of heavy
+misses per call. Compacting to `S` tokens (system prompt + summary) costs once:
+
+```
+compact  = C · read            # the compaction call reads the whole history
+         + summary · output    # the model writes the summary
+         + summary · write     # the next call caches it
+R*       = compact / ((C − S) · r_eff)
+```
+
+Remaining calls `R` come from your history: the median of `(L − n)` over past
+sessions longer than the current `n` calls, capped at 300. With too little
+history, the Lindy rule (`R ≈ n`) is used instead. The advisor recommends acting
+when `C ≥ --min-context` (100k by default) and the expected saving over `R`
+calls, with the context still growing at its recent rate, is positive. A
+hand-off (a short doc and a fresh session) uses the same math with a smaller
+`S`.
+
+**Backtest.** `kvleak advise --backtest` walks every past session call by call.
+The advisor sees only the past. When it fires, each later call's prompt is
+shrunk by the tokens dropped, priced at what that call actually paid per token,
+whether it was a hit or a miss. This counts money only. It cannot see quality
+lost in the summary, or rework caused by it.
+
 ## Caveats
 
 * Claude Code timestamps are written when a response finishes, not when the

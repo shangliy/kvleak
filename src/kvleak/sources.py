@@ -80,14 +80,20 @@ def default_claude_root() -> Path:
     return Path(base) / "projects" if base else Path.home() / ".claude" / "projects"
 
 
-def read_claude(path: str) -> Transcript:
+def read_claude(path: str, tail_bytes: Optional[int] = None) -> Transcript:
+    """Parse a Claude Code transcript; with `tail_bytes`, only its last N bytes."""
     steps: List[Step] = []
     seen = set()
     pending_compaction = False
     cwd = None
     sidechain = "/subagents/" in path.replace(os.sep, "/")
     session_id = Path(path).stem
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, "rb") as fb:
+        if tail_bytes is not None:
+            fb.seek(max(os.path.getsize(path) - tail_bytes, 0))
+            if fb.tell():
+                fb.readline()  # drop the partial first line
+        f = (raw.decode("utf-8", errors="replace") for raw in fb)
         for line in f:
             # Cheap prefilter: most lines are tool results / user text.
             if '"usage"' not in line and "compact" not in line:
