@@ -30,7 +30,7 @@ def test_audit_json_and_files(write_jsonl, tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["steps"] == 4
     assert data["buckets"]["ttl_expiry"]["count"] == 1
-    assert "<html" in html.read_text() and "kvleak report" in md.read_text()
+    assert "<html" in html.read_text(encoding="utf-8") and "kvleak report" in md.read_text(encoding="utf-8")
 
 
 def test_fail_over_gate(write_jsonl):

@@ -233,7 +233,7 @@ def cmd_statusline(args) -> int:
     data = {}
     if settings.exists():
         try:
-            data = json.loads(settings.read_text())
+            data = json.loads(settings.read_text(encoding="utf-8"))
         except ValueError:
             print("kvleak: {} is not valid JSON; not touching it.".format(settings), file=sys.stderr)
             return 1
@@ -253,7 +253,7 @@ def cmd_statusline(args) -> int:
         shutil.copy(settings, str(settings) + ".kvleak.bak")
     data["statusLine"] = {"type": "command", "command": command, "padding": 0}
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(json.dumps(data, indent=2) + "\n")
+    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print("Installed. Claude Code will show the cache countdown on its next refresh.\n"
           "  settings: {}\n  undo:     kvleak statusline --uninstall".format(settings))
     return 0
@@ -333,6 +333,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # bars and rings must not crash cp1252 consoles
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or (argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--version")):
         argv.insert(0, "audit")
@@ -352,13 +357,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 def _uninstall_statusline() -> int:
     settings = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
     try:
-        data = json.loads(settings.read_text())
+        data = json.loads(settings.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         print("kvleak: nothing to uninstall")
         return 0
     if "kvleak" in json.dumps(data.get("statusLine", "")):
         del data["statusLine"]
-        settings.write_text(json.dumps(data, indent=2) + "\n")
+        settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         print("Removed kvleak statusline from {}".format(settings))
     else:
         print("kvleak statusline is not installed")

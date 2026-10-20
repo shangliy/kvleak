@@ -96,6 +96,10 @@ def main() -> int:
 
     fmt.set_color(os.environ.get("NO_COLOR") is None)
     try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+    try:
         payload = json.load(sys.stdin)
     except ValueError:
         payload = {}
