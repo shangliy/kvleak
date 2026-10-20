@@ -33,6 +33,7 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 | `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89` |
 | `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
 | `kvleak tune --apply` | 用你的历史回测 Claude Code 自带的缓存设置（自动压缩窗口、缓存 TTL、空闲压缩阈值），把最省钱的值**直接写进 `settings.json`** |
+| `kvleak diet` | 拆开上下文：**到底是什么把它填满的**（工具输出、你贴的文本、模型自己的回复、系统提示词），每一块被携带了多少次、花了多少钱，并点名最贵的单项；`--all` 汇总 30 天 |
 | `kvleak breakeven 150k --idle 20m` | 保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
 | `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
 | `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
@@ -71,6 +72,27 @@ $ kvleak tune
 `--min-window 300k` 限制自动压缩的下限。审计报告里还新增了**死写入**一项：按 1 小时 TTL
 的 2 倍写入价缓存、却从来没被读回的 Token。对一次性的 `claude -p` 批处理来说这占了账单的 42%，
 所以那类任务该用 5 分钟 TTL。
+
+## 上下文到底是被什么填满的？`kvleak diet`
+
+压缩把上下文当成一整块。`kvleak diet` 把它拆开：每个工具输出、每段贴进来的文本、每条回复，都是在某次调用进入上下文、
+之后每次调用都被重读、直到被压缩掉的一块。Token 数按 API 的真实用量校准（图片按像素计价，不按 base64 长度），
+每一块都有一个**携带成本** = Token × 停留的调用次数 × 缓存读取价。
+
+```text
+$ kvleak diet --all
+
+  What filled the context · 33 sessions · 20.8M tokens entered · carrying it cost $956
+  source                 items  tokens  share  biggest  carried cost
+  assistant output       9,782   12.3M  59.0%    27.2k       $566.41
+  Bash results           7,750    4.3M  20.7%    15.4k       $210.63
+  your messages          1,890    1.6M   7.6%    49.7k        $64.84
+  system prompt & tools     33    1.3M   6.3%    61.6k        $61.93
+  Read results             421    857k   4.1%    25.0k        $36.08
+```
+
+最意外的一点：**模型自己的回复和回合内的思考，才是它反复重读的最大头**，不是文件内容。
+长工具循环会把整个回合的思考一直带到回合结束。所以 `/effort` 和简短回复不只是省输出 Token，也是在省上下文。
 
 ## 未命中原因分类
 

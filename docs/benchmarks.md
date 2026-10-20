@@ -132,6 +132,27 @@ reads** and **45% cache writes**, against 15% output and under 0.1% uncached
 input. Caching works; what costs money is carrying a median 161k (and up to
 1M) of context on every call.
 
+## 6. What filled the context (`kvleak diet --all`)
+
+The same 33 sessions, every block that entered the context, calibrated to the
+API's usage numbers (method in [how-it-works §8](how-it-works.md#8-context-diet-kvleak-diet)):
+
+| source | items | tokens | share | carried cost |
+|---|---:|---:|---:|---:|
+| assistant output (replies, tool calls, in-turn thinking) | 9,782 | 12.3M | **59.0%** | **$566** |
+| Bash results | 7,750 | 4.3M | **20.7%** | $211 |
+| your messages | 1,890 | 1.6M | 7.6% | $65 |
+| system prompt & tools (≈40k per session) | 33 | 1.3M | 6.3% | $62 |
+| Read results (many of them screenshots, priced by pixels) | 421 | 857k | 4.1% | $36 |
+| WebSearch / WebFetch / Agent / everything else | ≈1,200 | 440k | 2.1% | $16 |
+| **total** | | **20.8M** | | **$956** |
+
+The expected villain, whole-file reads, is 4%. The actual one is the model's
+own output: in a tool loop of hundreds of calls, every reply and every
+thinking block of that turn is re-sent on every call until the turn ends. The
+biggest single blocks are pasted documents (40k tokens carried for 500 calls
+≈ $6 each) and `cat` of generated tables.
+
 **Dead writes.** $207 of the 30-day bill was the cache-write premium on tokens
 nothing ever read back: $206 of it in one-shot `claude -p` runs, where every
 prompt is written at the 1h rate (2×) for a single use. That is 42% of what

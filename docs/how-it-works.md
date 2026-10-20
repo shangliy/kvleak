@@ -120,6 +120,31 @@ price. When nothing reads that entry before it expires (the last call of a
 session, a call right before a long gap, or a one-shot `claude -p` prompt), the
 premium was wasted. The audit sums it and names the workload it comes from.
 
+## 8. Context diet (`kvleak diet`)
+
+A Claude Code transcript holds every block that entered the context: tool
+results (`tool_result` in user turns, mapped back to the tool call by id),
+your messages, the assistant's replies, and the first prompt (system prompt,
+tools, CLAUDE.md). `diet` turns each into a record with:
+
+* **tokens** — the growth of the prompt between two calls (from `usage`, so it
+  is what the API billed) split across the blocks that arrived in between, in
+  proportion to their estimated size (`chars / 4` for text; images by pixel
+  count, capped at 1,600, as the API prices them). The first prompt's
+  unexplained remainder is the system prompt.
+* **carried** — the calls that re-read it: from the call after it arrived to
+  the next compaction or the end of the session.
+* **carried cost** — `tokens × carried × (read + miss_rate · (write − read))`.
+
+The assistant's reply is one such block. Its weight comes out of the same
+calibration, not from `output_tokens`, because thinking from earlier turns is
+stripped before the next user turn while thinking *within* a tool-use turn is
+re-sent on every call of that turn. In long tool loops that is most of the
+growth.
+
+`--all` sums the kinds over every interactive session in the window and keeps
+the ten costliest single blocks.
+
 ## Caveats
 
 * Claude Code timestamps are written when a response finishes, not when the

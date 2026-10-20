@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 (2026-10-20)
+
+- `kvleak diet`: what filled the context (tool results by tool, your messages, the assistant's replies, the system
+  prompt), calibrated to the API's usage numbers, with a carried cost per block and the costliest single items
+  named. `--all` aggregates 30 days. On the maintainer's history, 59% of everything that entered the context was
+  the assistant's own replies and in-turn thinking, 21% shell output, and only 4% file reads.
+
 ## 0.3.1 (2026-10-20)
 
 - Cold-cache-aware advice: when the TTL has expired, `kvleak advise` and the statusline (`⚠ /compact first saves ~$X`)

@@ -64,6 +64,7 @@ No API key, no config, no network calls, no dependencies. It reads
 | 6-worker swarm, pointers + warm workers + pinned models | **−86%** input cost in simulation |
 | Compaction advisor replayed on real history (compact only above 200k) | **−58%** input spend with 98 compactions in 30 days (≈3 per session); **−40%** with 23 above 400k |
 | `kvleak tune --apply` on the same 30 days | **−$909 (−45%)** from four settings Claude Code already has; auto-compact at 200k instead of ~967k is **−58%** alone |
+| What filled the context (`kvleak diet --all`, 33 sessions, 20.8M tokens) | **59%** was the assistant's own replies and in-turn thinking, **21%** shell output, 8% pasted text, 6% the ~40k system prompt; whole-file reads only 4% |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -79,6 +80,7 @@ Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 | `kvleak statusline --install` | Adds a live **cache TTL countdown** to Claude Code: `◕ cache 3:41 · 182k ctx · rebuild $0.89`. |
 | `kvleak advise` | Tells you whether to **`/compact` or hand off to a fresh session now**, and when that pays for itself. `--backtest` replays your history with the advisor in the loop. |
 | `kvleak tune --apply` | Backtests Claude Code's own cache settings (auto-compact window, cache TTLs, idle compaction) on your history and **writes the winners to `settings.json`**. |
+| `kvleak diet` | Shows **what filled the context** (tool results, your pastes, the replies themselves, the system prompt) and what each piece cost to carry, with the costliest single items named. `--all` aggregates 30 days. |
 | `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die. |
 | `kvleak pointer build.log --status FAIL` | Turns a huge file into a ~60-token hand-off message for multi-agent boards. |
 | `kvleak --fail-over 15` | Exits with code 2 when more than 15% of input spend leaked, so it can gate CI or nightly jobs. |
@@ -183,6 +185,43 @@ would rather keep more detail. The audit also reports **dead writes**: tokens
 written at the 1h cache-write premium (2×) that nothing ever read back. For
 one-shot `claude -p` batches that is about 42% of their bill, which is why the
 5m TTL wins there.
+
+## What filled the context in the first place?
+
+Compaction treats the context as a blob. `kvleak diet` opens it up: every tool
+result, pasted message and reply is a block that entered the context at some
+call and was re-read on every call after it until a compaction dropped it.
+Token counts are calibrated to the API's own usage numbers (images priced by
+pixels, not base64 length), and each block gets a **carried cost**: tokens ×
+calls it stayed × cache-read price.
+
+```text
+$ kvleak diet --all
+
+  What filled the context · 33 sessions · 20.8M tokens entered · carrying it cost $956
+  source                 items  tokens  share  biggest  carried cost
+  assistant output       9,782   12.3M  59.0%    27.2k       $566.41
+  Bash results           7,750    4.3M  20.7%    15.4k       $210.63
+  your messages          1,890    1.6M   7.6%    49.7k        $64.84
+  system prompt & tools     33    1.3M   6.3%    61.6k        $61.93
+  Read results             421    857k   4.1%    25.0k        $36.08
+
+  Costliest single items
+  session   source  what                             tokens    carried   cost
+  751a482b  Read    body8.txt                         24.1k  568 calls  $4.07
+  5701e1a7  Bash    cat paper_www/gen/numbers*.tex    15.4k  502 calls  $2.30
+
+  How to shrink it
+  1. Assistant output is 59% of what entered the context. The replies themselves are re-sent on every
+     later call. Ask for terse answers in tool loops, keep reports in files, and lower `/effort` for routine steps.
+  2. Bash results is 21% of what entered the context. Pipe through `tail -n 40` / `head`, redirect long
+     logs to a file and `kvleak pointer` it, and run long jobs in the background ...
+```
+
+The surprise in that table: the model's **own replies and in-turn thinking are
+the biggest thing it re-reads**, not file contents. Long tool loops carry every
+thought from the turn until the turn ends. That makes `/effort` and terse
+replies a context lever, not just an output-token lever.
 
 ## Should I keep this cache alive?
 

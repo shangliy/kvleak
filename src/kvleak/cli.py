@@ -7,6 +7,7 @@
     kvleak advise                compact or hand off now? (newest session)
     kvleak tune                  backtest Claude Code's cache settings on your history
     kvleak tune --apply          ...and write the winners to ~/.claude/settings.json
+    kvleak diet                  what filled the context, and what each piece cost to carry
     kvleak breakeven 150k        should I keep this cache alive?
     kvleak statusline --install  live TTL countdown in Claude Code
     kvleak pointer build.log     compact hand-off message for multi-agent boards
@@ -32,7 +33,7 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "breakeven", "statusline", "pointer", "models"}
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "breakeven", "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
 
@@ -223,6 +224,72 @@ def cmd_advise(args) -> int:
     else:
         print("  " + c("→ Keep going.", "bold") + " The session is likely too close to its end for compaction to pay off.")
     print(c("  Money only: compact when the summary would still carry what you need.", "grey"))
+    return 0
+
+
+def cmd_diet(args) -> int:
+    from .diet import PLAIN_KINDS, SYSTEM_KIND, aggregate, read_diet, tips
+
+    c = fmt.c
+    miss = _profile(args).miss_rate
+    label = lambda k: k if k in PLAIN_KINDS else k + " results"  # noqa: E731
+    if args.all:
+        since = args.since if args.since is not None else time.time() - 30 * 86400
+        transcripts = load_all(_default_paths(args), args.format, since, args.project)
+        kinds, top, n = aggregate(transcripts, miss)
+        if not kinds:
+            print("kvleak: no interactive sessions in that window", file=sys.stderr)
+            return 1
+        total = sum(v["tokens"] for v in kinds.values())
+        print(c("\n  What filled the context · {} sessions · {} tokens entered · carrying it cost {}".format(
+            n, fmt.tok(total), fmt.usd(sum(v["carry_usd"] for v in kinds.values()))), "bold"))
+        rows = [["source", "items", "tokens", "share", "biggest", "carried cost"]]
+        for k, v in list(kinds.items())[:10]:
+            rows.append([label(k), f"{v['count']:,}", fmt.tok(v["tokens"]), fmt.pct(v["tokens"] / total),
+                         fmt.tok(v["max"]), fmt.usd(v["carry_usd"])])
+        print(fmt.table(rows, "lrrrrr"))
+        if top:
+            print(c("\n  Costliest single items", "bold"))
+            rows = [["session", "source", "what", "tokens", "carried", "cost"]]
+            for sid, b in top[:args.top]:
+                rows.append([sid[:8], b.kind, b.label, fmt.tok(b.tokens), "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
+            print(fmt.table(rows, "lllrrr"))
+    else:
+        paths = _default_paths(args)
+        if args.id:
+            path = _find_session(paths, args.id)
+        else:
+            files = [f for f in discover(paths) if "/subagents/" not in f.replace(os.sep, "/")]
+            path = max(files, key=os.path.getmtime) if files else None
+        if not path:
+            print("kvleak: no transcript found", file=sys.stderr)
+            return 1
+        d = read_diet(path, miss_rate=miss)
+        if not d.calls:
+            print("kvleak: no billed calls in {}".format(path), file=sys.stderr)
+            return 1
+        kinds = d.by_kind()
+        total = d.total_tokens or 1
+        print(c("\n  What filled the context · {} · {} calls · peak {} · {} compactions · carrying it cost {}".format(
+            d.session_id[:8], d.calls, fmt.tok(d.peak), d.compactions, fmt.usd(d.carry_usd)), "bold"))
+        rows = [["source", "items", "tokens", "share", "biggest", "carried cost"]]
+        for k, v in list(kinds.items())[:10]:
+            rows.append([label(k), f"{v['count']:,}", fmt.tok(v["tokens"]), fmt.pct(v["tokens"] / total),
+                         fmt.tok(v["max"]), fmt.usd(v["carry_usd"])])
+        print(fmt.table(rows, "lrrrrr"))
+        top = sorted((b for b in d.blocks if b.kind != SYSTEM_KIND), key=lambda b: -b.carry_usd)[:args.top]
+        if top:
+            print(c("\n  Costliest single items", "bold"))
+            rows = [["call", "source", "what", "tokens", "carried", "cost"]]
+            for b in top:
+                rows.append([str(b.call), b.kind, b.label + (" (image)" if b.is_image else ""), fmt.tok(b.tokens),
+                             "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
+            print(fmt.table(rows, "rllrrr"))
+    print(c("\n  How to shrink it", "bold"))
+    for i, tip in enumerate(tips(kinds), 1):
+        print("  {}. {}".format(i, tip))
+    print(c("  Tokens are calibrated to the API's usage numbers; images are priced by pixels. "
+            "Carried cost = tokens × calls it stayed in the context × cache-read price.", "grey"))
     return 0
 
 
@@ -603,6 +670,13 @@ def build_parser() -> argparse.ArgumentParser:
     tu.add_argument("--reset", action="store_true", help="remove every setting kvleak tune wrote")
     tu.add_argument("--json", action="store_true", help="machine-readable plan")
     tu.set_defaults(func=cmd_tune)
+
+    di = sub.add_parser("diet", help="what filled the context and what each piece cost to carry (newest session)")
+    _add_common(di)
+    di.add_argument("id", nargs="?", help="session id (prefix ok) or transcript path")
+    di.add_argument("--all", action="store_true", help="aggregate every interactive session in the window (30d default)")
+    di.add_argument("--top", type=int, default=8, help="single items to list (default 8)")
+    di.set_defaults(func=cmd_diet)
 
     b = sub.add_parser("breakeven", help="keep-alive vs. rebuild calculator")
     b.add_argument("tokens", type=parse_tokens, help="cached prefix size, e.g. 150k")
