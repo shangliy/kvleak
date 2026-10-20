@@ -63,7 +63,7 @@ $ kvleak tune
   `claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL  1h            5m          $169.11  20535 one-shot runs: 5m costs $301, 1h costs $471 · set it in the batch script
   CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min · compacting there nets $212 at 200k, $232 at 100k
 
-  Total if applied: $909.35 per 30d
+  Total if applied: $740.43 per 30d  (+$169.11 from the habits above)
   Write these to ~/.claude/settings.json: kvleak tune --apply  (undo: kvleak tune --reset)
 ```
 

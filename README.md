@@ -173,7 +173,7 @@ $ kvleak tune
   CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min · compacting there nets $212 at 200k, $232 at 100k
   subagent cold starts                            271 × 19.8k   staggered    $11.04  140 of 271 started with nothing cached · launch one, let it warm the 10.9k shared prefix, then the rest
 
-  Total if applied: $909.35 per 30d  (+$11.04 from the habits above)
+  Total if applied: $740.43 per 30d  (+$180.15 from the habits above)
   Write these to ~/.claude/settings.json: kvleak tune --apply  (undo: kvleak tune --reset)
 ```
 
