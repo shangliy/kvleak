@@ -109,6 +109,7 @@ class Advice:
     handoff_saving: float
     per_call_now: float  # what carrying the context costs per call today
     min_context: int = MIN_CONTEXT
+    cold: bool = False
 
     @property
     def best(self) -> Optional[str]:
@@ -136,7 +137,11 @@ def advise(
     base_tokens: int = DEFAULT_BASE,
     handoff_doc_tokens: int = 3_000,
     min_context: int = MIN_CONTEXT,
+    cold: bool = False,
 ) -> Advice:
+    """`cold`: the cache has expired. Whatever happens next re-reads the whole context at
+    full price (compaction) or rewrites it at the write price (continuing), which makes
+    compacting *more* attractive, not less."""
     profile = profile or Profile([])
     m = profile.miss_rate
     write = price.write_mult(ttl)
@@ -144,15 +149,21 @@ def advise(
     remaining = profile.expected_remaining(calls_so_far)
     if profile.compact_floor != DEFAULT_BASE + DEFAULT_SUMMARY:  # learned from real compactions
         base_tokens = max(profile.compact_floor - summary_tokens, 0)
+    read_now = 1.0 if cold else price.read_mult  # price of reading the context one more time
 
     # Compact: read the whole thing once, write a summary, then rebuild base (cached) + summary.
     s_compact = base_tokens + summary_tokens
-    compact_cost = context * price.read_mult + summary_tokens * price.output_mult + summary_tokens * write
+    compact_cost = context * read_now + summary_tokens * price.output_mult + summary_tokens * write
     # Hand-off: write a short doc, start a fresh session (base usually cached, doc is new).
     s_handoff = base_tokens + handoff_doc_tokens
-    handoff_cost = context * price.read_mult + handoff_doc_tokens * price.output_mult + handoff_doc_tokens * write
+    handoff_cost = context * read_now + handoff_doc_tokens * price.output_mult + handoff_doc_tokens * write
+    if cold:  # the base prefix is cold too and must be rewritten either way
+        compact_cost += base_tokens * write
+        handoff_cost += base_tokens * write
 
     keep = _carry(context, growth_per_call, remaining, r_eff)
+    if cold:
+        keep += context * (write - r_eff)  # the next call rebuilds everything first
 
     def plan(s: int, one_time: float):
         saved_per_call = max(context - s, 1) * r_eff
@@ -176,6 +187,7 @@ def advise(
         handoff_saving=h_save,
         per_call_now=context * r_eff,
         min_context=min_context,
+        cold=cold,
     )
 
 
@@ -185,7 +197,9 @@ def advise_steps(
     profile: Optional[Profile] = None,
     calls_so_far: Optional[int] = None,
     min_context: int = MIN_CONTEXT,
+    now: Optional[float] = None,
 ) -> Optional[Advice]:
+    """Advice for the session these steps came from. With `now`, detects an expired cache."""
     if not steps:
         return None
     last = steps[-1]
@@ -193,6 +207,7 @@ def advise_steps(
     window = steps[-50:]
     growth = (window[-1].prompt - window[0].prompt) / max(len(window) - 1, 1)
     ttl = TTL_1H if last.write_1h > last.write_5m else TTL_5M
+    cold = bool(now is not None and last.ts is not None and now - last.ts.timestamp() > ttl)
     return advise(
         context,
         price,
@@ -201,6 +216,7 @@ def advise_steps(
         growth_per_call=max(growth, 0.0),
         profile=profile,
         min_context=min_context,
+        cold=cold,
     )
 
 

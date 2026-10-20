@@ -286,6 +286,9 @@ class SubagentStarts:
     count: int = 0
     tokens: int = 0
     cost_usd: float = 0.0
+    cold: int = 0  # first calls that read nothing at all: no sibling had warmed the shared prefix yet
+    base: int = 0  # size of that shared prefix (system prompt + tools + CLAUDE.md), learned
+    stagger_saving_usd: float = 0.0  # if each cold start had read the prefix instead of writing it
 
     @property
     def avg(self) -> float:
@@ -293,13 +296,22 @@ class SubagentStarts:
 
 
 def subagent_starts(transcripts: Sequence[Transcript], price_for: PriceFor) -> SubagentStarts:
+    """Subagents launched in parallel all start cold: the first one has not finished
+    writing the shared prefix when the others send theirs. Launching one first and the
+    rest once it has replied turns those writes into reads."""
     res = SubagentStarts()
-    for t in transcripts:
-        if not t.is_subagent or not t.steps:
-            continue
-        s = t.steps[0]
+    firsts = [t.steps[0] for t in transcripts if t.is_subagent and t.steps]
+    if not firsts:
+        return res
+    sizes = sorted(s.uncached for s in firsts)
+    res.base = sizes[len(sizes) // 4]  # the lean quartile ≈ prefix without the task prompt
+    for s in firsts:
         p = price_for(s.model)
         res.count += 1
         res.tokens += s.uncached
         res.cost_usd += p.usd(s.input + s.write_5m * p.write_5m_mult + s.write_1h * p.write_1h_mult) or 0.0
+        if s.read < 2_000:
+            res.cold += 1
+            ttl = _ttl_of(s, TTL_5M)
+            res.stagger_saving_usd += p.usd(min(res.base, s.uncached) * (p.write_mult(ttl) - p.read_mult)) or 0.0
     return res

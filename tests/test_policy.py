@@ -3,10 +3,10 @@ import json
 from conftest import T0, claude_line
 
 from kvleak import load
-from kvleak.advisor import Profile
+from kvleak.advisor import Profile, advise
 from kvleak.cli import main
-from kvleak.policy import best_ttl, dead_writes, idle_compaction, pick_window, split, window_sweep
-from kvleak.pricing import price_for
+from kvleak.policy import best_ttl, dead_writes, idle_compaction, pick_window, split, subagent_starts, window_sweep
+from kvleak.pricing import TTL_1H, price_for
 from kvleak.statusline import render
 
 
@@ -111,3 +111,33 @@ def test_statusline_uses_claude_code_fields_without_transcript():
     assert "25:00" in warm and "183k" in warm and "rebuild" in warm
     payload["prompt_cache"]["warm"] = False
     assert "cold" in render(payload, now=1_000_000)
+
+
+def test_cold_cache_makes_compaction_more_attractive():
+    p = price_for("claude-opus-5-5")
+    prof = Profile([400] * 10, 0.01)
+    warm = advise(300_000, p, ttl=TTL_1H, calls_so_far=100, growth_per_call=0, profile=prof)
+    cold = advise(300_000, p, ttl=TTL_1H, calls_so_far=100, growth_per_call=0, profile=prof, cold=True)
+    assert cold.cold and cold.compact_cost > warm.compact_cost  # full-price read instead of a cache read
+    assert cold.compact_saving > warm.compact_saving  # ...but continuing would rebuild at 2x
+
+
+def test_statusline_cold_hint_says_first(write_jsonl, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    p = _interactive(write_jsonl, gap=30, n=40)  # ~280k context, 1h writes
+    last = p.steps[-1].ts.timestamp()
+    cold = render({"transcript_path": p.path}, now=last + 2 * 3600)
+    assert "cold" in cold and "/compact first saves" in cold
+    warm = render({"transcript_path": p.path}, now=last + 60)
+    assert "/compact saves" in warm and "first" not in warm
+
+
+def test_subagent_starts_spot_parallel_cold_launches(write_jsonl):
+    subs = []
+    for i in range(4):
+        read = 0 if i < 3 else 11_000  # three launched together (cold), one later (warm prefix)
+        line = claude_line(i, i, read=read, w1h=11_000 if read == 0 else 500, inp=6_000, model="claude-opus-5-5", sid="s")
+        subs.append(load(str(write_jsonl([line], name=f"agent-{i}.jsonl", sub="s/subagents")), "claude"))
+    r = subagent_starts(subs, price_for)
+    assert r.count == 4 and r.cold == 3 and r.stagger_saving_usd > 0
+    assert r.base <= 17_000

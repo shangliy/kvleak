@@ -75,7 +75,7 @@ def render(payload: dict, now: Optional[float] = None) -> str:
     price = price_for(model)
     rebuild = cached * price.write_mult(ttl)
     cost = usd(price.usd(rebuild)) if price.input_per_mtok is not None else tok(rebuild) + " tok"
-    hint = _compact_hint(steps, cached, price) if cached >= HINT_MIN_CONTEXT else ""
+    hint = _compact_hint(steps, price, now, cold=left <= 0) if cached >= HINT_MIN_CONTEXT else ""
     if left <= 0:
         return "{} {} · next msg rebuilds {} ({}){}".format(
             c("○", "red"), c("cache cold", "red", "bold"), tok(cached), cost, hint
@@ -89,8 +89,12 @@ def render(payload: dict, now: Optional[float] = None) -> str:
     )
 
 
-def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], context: int, price) -> str:
-    """' · ⚠ /compact saves ~$12' when carrying this context costs more than shrinking it."""
+def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], price, now: float, cold: bool = False) -> str:
+    """' · ⚠ /compact saves ~$12' when carrying this context costs more than shrinking it.
+
+    On a cold cache the next message rebuilds everything at the write price, so
+    compacting *first* (one full-price read, then a small prefix) saves even more.
+    """
     from .advisor import Profile, advise_steps
 
     if price.input_per_mtok is None:
@@ -98,13 +102,14 @@ def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], context: int, pri
     recent, n_calls = steps()
     if not recent:
         return ""
-    a = advise_steps(recent, price, Profile.load(), calls_so_far=n_calls)
+    a = advise_steps(recent, price, Profile.load(), calls_so_far=n_calls, now=now if cold else None)
     if not a or not a.best:
         return ""
     saving = price.usd(max(a.compact_saving, a.handoff_saving)) or 0
     if saving < 1:
         return ""
-    return " · " + c("⚠ /compact saves ~{}".format(usd(saving)), "yellow", "bold")
+    verb = "/compact first saves" if cold else "/compact saves"
+    return " · " + c("⚠ {} ~{}".format(verb, usd(saving)), "yellow", "bold")
 
 
 def main() -> int:

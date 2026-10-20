@@ -189,10 +189,15 @@ def cmd_advise(args) -> int:
         print("kvleak: no billed calls in {}".format(path), file=sys.stderr)
         return 1
     price = price_for(t.steps[-1].model)
-    a = advise_steps(t.steps, price, _profile(args), min_context=args.min_context)
+    a = advise_steps(t.steps, price, _profile(args), min_context=args.min_context, now=time.time())
     money = (lambda x: fmt.usd(price.usd(x))) if price.input_per_mtok else (lambda x: fmt.tok(x) + " tok")
     print(c("\n  {} · {} · {}".format(t.session_id[:8], t.project, t.steps[-1].model), "bold"))
     print("  Context now          {}  (+{}/call)".format(fmt.tok(a.context), fmt.tok(a.growth_per_call)))
+    if a.cold:
+        idle = time.time() - t.steps[-1].ts.timestamp()
+        print("  Cache                {}  the next message rebuilds {} ({}); compacting first reads it once at full price instead".format(
+            c("cold, idle {}".format(fmt.duration(idle)), "red", "bold"), fmt.tok(a.context),
+            money(a.context * price.write_mult(a.ttl))))
     print("  Carrying it costs    {} per call (cache read + {}% miss risk)".format(
         money(a.per_call_now), round(100 * _profile(args).miss_rate, 1)))
     print("  Calls so far         {}  ·  expected still to come ≈ {:.0f} (from your history)".format(
@@ -205,7 +210,10 @@ def cmd_advise(args) -> int:
                  "{:.1f} calls".format(a.handoff_breakeven), money(a.handoff_saving)])
     print(fmt.table(rows, "lrrrr"))
     print()
-    if a.best == "compact":
+    if a.best == "compact" and a.cold:
+        print("  " + c("→ Run /compact before your next message.", "green", "bold")
+              + " The cache is cold anyway; shrinking first pays for itself in {:.0f} calls.".format(a.compact_breakeven))
+    elif a.best == "compact":
         print("  " + c("→ Run /compact now.", "green", "bold") + " It pays for itself in {:.0f} calls.".format(a.compact_breakeven))
     elif a.best == "handoff":
         print("  " + c("→ Write a short hand-off doc and start a fresh session", "green", "bold")
@@ -279,7 +287,8 @@ def cmd_tune(args) -> int:
     def row(name, now, best, saving, why, key=None, value=None, env_key=None):
         rows.append([name, now, c(best, "green", "bold") if best != now else best,
                      c(fmt.usd(saving), "green") if saving >= 1 else "–", why])
-        plan["rows"].append({"setting": name, "now": now, "best": best, "saving_usd": round(saving, 2), "why": why})
+        plan["rows"].append({"setting": name, "now": now, "best": best, "saving_usd": round(saving, 2), "why": why,
+                             "applies": bool(key or env_key)})
         if saving >= 1 and best != now:
             if key:
                 plan["settings"][key] = value
@@ -343,11 +352,15 @@ def cmd_tune(args) -> int:
     # 4. subagent cold starts: no setting to flip, but three knobs in the agent file.
     sub = subagent_starts(transcripts, price_for)
     if sub.count:
-        row("subagent cold starts", "{} × {} avg".format(sub.count, fmt.tok(sub.avg)), "smaller", 0.0,
-            "{} on first calls · omitClaudeMd: true, a `tools:` allowlist, or context: fork to share the parent's cache".format(
-                fmt.usd(sub.cost_usd)))
+        why = "{} on first calls; {} of {} started with nothing cached".format(fmt.usd(sub.cost_usd), sub.cold, sub.count)
+        if sub.stagger_saving_usd >= 1:
+            why += " · launch one, let it warm the {} shared prefix, then the rest: ~{}".format(
+                fmt.tok(sub.base), fmt.usd(sub.stagger_saving_usd))
+        why += " · trim the prefix: omitClaudeMd: true, a `tools:` allowlist, or context: fork"
+        row("subagent cold starts", "{} × {} avg".format(sub.count, fmt.tok(sub.avg)), "staggered", sub.stagger_saving_usd, why)
 
-    total = sum(r["saving_usd"] for r in plan["rows"])
+    total = sum(r["saving_usd"] for r in plan["rows"] if r["applies"])
+    manual = sum(r["saving_usd"] for r in plan["rows"] if not r["applies"])
     if args.json:
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
@@ -358,7 +371,8 @@ def cmd_tune(args) -> int:
     print(fmt.table(rows, "lllrl"))
     print()
     if plan["settings"] or plan["env"]:
-        print("  Total if applied: " + c(fmt.usd(total), "green", "bold") + " per {}".format(_window_label(since)))
+        print("  Total if applied: " + c(fmt.usd(total), "green", "bold") + " per {}".format(_window_label(since))
+              + (c("  (+{} from the habits above)".format(fmt.usd(manual)), "grey") if manual >= 1 else ""))
         if args.apply:
             return _apply_tune(plan)
         print("  Write these to {}: ".format(_settings_path()) + c("kvleak tune --apply", "bold")

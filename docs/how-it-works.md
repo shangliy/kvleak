@@ -82,6 +82,13 @@ calls, with the context still growing at its recent rate, is positive. A
 hand-off (a short doc and a fresh session) uses the same math with a smaller
 `S`.
 
+**Cold cache.** When the TTL has already expired, the next message rewrites
+the whole context at the write price, and a compaction reads it once at the
+full uncached price instead of the cache-read price. Both options pay for the
+context once more, but `1×` (compact, then carry a small prefix) beats `2×`
+(rebuild, then keep carrying everything), so the advisor and the statusline
+(`⚠ /compact first saves ~$X`) lean harder towards compacting on a cold cache.
+
 **Backtest.** `kvleak advise --backtest` walks every past session call by call.
 The advisor sees only the past. When it fires, each later call's prompt is
 shrunk by the tokens dropped, priced at what that call actually paid per token,
@@ -100,6 +107,13 @@ your last 30 days under each candidate value and reports the difference:
 | `subagentPromptCacheTtl` | Same replay over subagent transcripts. |
 | `CLAUDE_CODE_PROMPT_CACHE_TTL` for `claude -p` batches | One-shot runs share a prefix across runs, so the replay orders them by time and rewrites the shared prefix whenever the gap between runs exceeds the TTL. The prompt itself is written once and never read back under either TTL, so the cheaper write usually wins. |
 | `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | For every idle gap of 54 min or more in a 1h-TTL session: the rebuild that idle compaction avoids minus what the compaction costs, at the default 200k threshold and at 100k. |
+
+**Parallel subagent launches.** Subagents started together all send their
+first request before any of them has finished writing the shared prefix
+(system prompt, tools, CLAUDE.md), so every one of them writes it. `tune`
+counts first calls that read nothing, estimates the prefix size as the lean
+quartile of first-call sizes, and prices what launching one subagent first
+and the rest after its first reply would have saved.
 
 **Dead writes.** A cache write costs 1.25× (5m) or 2× (1h) the plain input
 price. When nothing reads that entry before it expires (the last call of a

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-10-20)
+
+- Cold-cache-aware advice: when the TTL has expired, `kvleak advise` and the statusline (`⚠ /compact first saves ~$X`)
+  price the compaction at a full-price read and the alternative at a full rebuild, so they recommend compacting
+  *before* the next message.
+- `kvleak tune` spots parallel subagent launches that all start cold (140 of 271 in the maintainer's history) and
+  prices launching one first so the rest read the shared prefix.
+
 ## 0.3.0 (2026-10-20)
 
 - `kvleak tune`: replays your history under every value of the cache settings Claude Code exposes

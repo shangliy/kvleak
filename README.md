@@ -143,6 +143,9 @@ $ kvleak advise
 ```
 
 The statusline shows the same advice live: `● cache 59:47 · 249k ctx · rebuild $1.99 · ⚠ /compact saves ~$9.42`.
+Once the cache has gone cold it switches to `⚠ /compact first saves ~$X`: the
+next message would rewrite the whole context at 2× anyway, and one full-price
+read followed by a small prefix is cheaper than that.
 
 In a backtest on 30 days of real sessions, an advisor that only knew the past
 would have cut input spend by **58%** compacting about 3 times per session
@@ -168,9 +171,9 @@ $ kvleak tune
   subagentPromptCacheTtl                          5m            5m                –  271 subagents: 5m costs $274, 1h costs $386
   `claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL  1h            5m          $169.11  20535 one-shot runs: 5m costs $301, 1h costs $471 · set it in the batch script
   CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min · compacting there nets $212 at 200k, $232 at 100k
-  subagent cold starts                            271 × 19.8k   smaller           –  $40.23 on first calls · omitClaudeMd: true, a `tools:` allowlist, or context: fork
+  subagent cold starts                            271 × 19.8k   staggered    $11.04  140 of 271 started with nothing cached · launch one, let it warm the 10.9k shared prefix, then the rest
 
-  Total if applied: $909.35 per 30d
+  Total if applied: $909.35 per 30d  (+$11.04 from the habits above)
   Write these to ~/.claude/settings.json: kvleak tune --apply  (undo: kvleak tune --reset)
 ```
 
