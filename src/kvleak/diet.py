@@ -1,16 +1,17 @@
 """What filled the context, and what each piece cost to carry.
 
 Compaction and TTLs treat the context as a blob. This module opens it up: every
-tool result, user message and assistant turn in a Claude Code transcript is a
-block that entered the context at some call and was re-read on every call after
-it, until a compaction dropped it. The biggest blocks are usually a handful of
-tool results (a whole file, a long test log), and they are the cheapest thing to
-fix: read with a range, pipe through `tail`, or let a subagent read and report.
+tool result, user message, thinking block, tool call and reply in a Claude Code
+transcript is a block that entered the context at some call and was re-read on
+every call after it, until a compaction dropped it. The biggest blocks are
+usually not what people expect (whole files), but the model's own output: the
+scripts it sends to Bash, the files it writes, and on current models the
+thinking it keeps across turns.
 
 Token counts are calibrated against the API's own usage numbers: the tokens a
 call added to the prompt (from `usage`) are split across the blocks that arrived
-since the previous call, in proportion to their estimated size. Images are
-priced by their pixel count, like the API does, not by their base64 length.
+since the previous call. Thinking is exact (`output_tokens_details`); the rest
+is estimated from text length, images by pixel count like the API prices them.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import base64
 import json
 import os
 import struct
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -28,14 +30,18 @@ from .sources import Transcript
 CHARS_PER_TOKEN = 4.0
 IMAGE_MAX_TOKENS = 1_600  # the API downsizes images to ~1.15 MP; tokens ≈ pixels / 750
 USER_KIND = "your messages"
-ASSISTANT_KIND = "assistant output"
+TEXT_KIND = "assistant text"
+THINKING_KIND = "thinking"
 SYSTEM_KIND = "system prompt & tools"
-PLAIN_KINDS = (USER_KIND, ASSISTANT_KIND, SYSTEM_KIND)  # not tool results
+PLAIN_KINDS = (USER_KIND, TEXT_KIND, THINKING_KIND, SYSTEM_KIND)  # everything else is "<Tool> results"
+INPUT_SUFFIX = " inputs"  # "Bash inputs": what the model sent to the tool
+LONG_TURN = 20  # calls; a turn this long is a loop worth moving to a subagent
+SUBAGENT_START = 20_000  # context a fresh subagent starts with
 
 
 @dataclass
 class Block:
-    kind: str  # tool name, USER_KIND or ASSISTANT_KIND
+    kind: str
     label: str  # what it was: file path, command, first words
     call: int  # index of the call that first sent it
     est: float  # estimated tokens before calibration
@@ -44,6 +50,18 @@ class Block:
     carry_cost: float = 0.0  # base-equivalent tokens
     carry_usd: float = 0.0
     is_image: bool = False
+    exact: bool = False  # est comes from usage, not from text length
+
+
+@dataclass
+class Turn:
+    """One user request and every call made before the next one."""
+
+    start: int  # first call index
+    calls: int
+    context: int  # prompt size at the first call
+    history_usd: float = 0.0  # what re-reading that starting context on every call cost
+    subagent_saving_usd: float = 0.0  # had the loop run in a fresh subagent instead
 
 
 @dataclass
@@ -52,7 +70,11 @@ class Diet:
     calls: int
     peak: int  # largest prompt seen
     blocks: List[Block] = field(default_factory=list)
+    turns: List[Turn] = field(default_factory=list)
     compactions: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    effort: Dict[Tuple[str, str], List[int]] = field(default_factory=dict)  # (model, effort) -> [calls, thinking]
 
     def by_kind(self) -> Dict[str, dict]:
         out: Dict[str, dict] = {}
@@ -72,6 +94,10 @@ class Diet:
     @property
     def carry_usd(self) -> float:
         return sum(b.carry_usd for b in self.blocks)
+
+    @property
+    def long_turns(self) -> List[Turn]:
+        return sorted((t for t in self.turns if t.calls >= LONG_TURN), key=lambda t: -t.history_usd)
 
 
 def _image_tokens(block: dict) -> float:
@@ -117,16 +143,26 @@ def _label(name: str, inp: dict) -> str:
     return name
 
 
+def _first_line(text: str) -> str:
+    text = text.strip()
+    return text.splitlines()[0][:48] if text else ""
+
+
 def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02) -> Diet:
     pending: List[Block] = []
     blocks: List[Block] = []
     tool_names: Dict[str, Tuple[str, dict]] = {}
     seen_calls = set()
+    seen_messages = set()
     call = 0
     prev_prompt = 0
     peak = 0
     compaction_at: List[int] = []
+    turns: List[Turn] = []
+    turn: Optional[Turn] = None
     model = None
+    out_tokens = think_tokens = 0
+    effort: Dict[Tuple[str, str], List[int]] = defaultdict(lambda: [0, 0])
     with open(path, "rb") as f:
         for raw in f:
             try:
@@ -140,9 +176,17 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                 compaction_at.append(call)
                 continue
             if t == "assistant":
+                # Claude Code writes one line per content block; the reply's blocks enter the
+                # context with the *next* call, so they go to `pending` like a tool result.
                 for part in content if isinstance(content, list) else []:
-                    if isinstance(part, dict) and part.get("type") == "tool_use":
-                        tool_names[part.get("id", "")] = (part.get("name") or "?", part.get("input") or {})
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "tool_use":
+                        name, inp = part.get("name") or "?", part.get("input") or {}
+                        tool_names[part.get("id", "")] = (name, inp)
+                        pending.append(Block(name + INPUT_SUFFIX, _label(name, inp), call, len(json.dumps(inp)) / CHARS_PER_TOKEN))
+                    elif part.get("type") == "text":
+                        pending.append(Block(TEXT_KIND, _first_line(part.get("text") or ""), call, len(part.get("text") or "") / CHARS_PER_TOKEN))
                 usage = m.get("usage")
                 key = (m.get("id"), d.get("requestId"))
                 if not usage or key in seen_calls or m.get("model") == "<synthetic>":
@@ -151,21 +195,34 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                 model = m.get("model") or model
                 prompt = (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0) + (usage.get("cache_read_input_tokens") or 0)
                 output = usage.get("output_tokens") or 0
+                thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens") or 0
+                out_tokens += output
+                think_tokens += thinking
+                e = effort[(model or "?", d.get("effort") or "?")]
+                e[0] += 1
+                e[1] += thinking
                 peak = max(peak, prompt)
-                # Everything that arrived since the previous call (its own reply included) is
-                # what this prompt grew by. Split that growth across the arrivals by estimated size.
+                if turn is None:
+                    turn = Turn(call, 0, prompt)
+                    turns.append(turn)
+                turn.calls += 1
+                # Everything that arrived since the previous call is what this prompt grew by.
+                # Thinking is known exactly; the rest shares what remains, by estimated size.
                 added = max(prompt - prev_prompt, 0) if call else prompt
                 if not call:  # the first prompt is mostly the system prompt, tools and CLAUDE.md
                     pending.append(Block(SYSTEM_KIND, "system prompt, tools, CLAUDE.md", 0,
                                          max(prompt - sum(b.est for b in pending), 0)))
-                est_sum = sum(b.est for b in pending)
+                exact = sum(b.est for b in pending if b.exact)
+                rest = max(added - exact, 0)
+                est_sum = sum(b.est for b in pending if not b.exact)
                 for b in pending:
-                    b.tokens = added * b.est / est_sum if est_sum else 0.0
+                    b.tokens = b.est if b.exact else (rest * b.est / est_sum if est_sum else 0.0)
                     b.call = call
                 blocks.extend(pending)
-                # The reply is re-sent with the next call; thinking is mostly stripped by then,
-                # so its true weight comes out of the next calibration, not from output_tokens.
-                pending = [Block(ASSISTANT_KIND, "text, tool calls (and thinking within a turn)", call, output)]
+                pending = []
+                if thinking and m.get("id") not in seen_messages:  # kept across turns on current models
+                    pending.append(Block(THINKING_KIND, "kept in context on this model", call, float(thinking), exact=True))
+                seen_messages.add(m.get("id"))
                 prev_prompt = prompt
                 call += 1
                 continue
@@ -173,8 +230,12 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                 continue
             if d.get("isCompactSummary"):
                 compaction_at.append(call)
+            is_tool_result = isinstance(content, list) and any(
+                isinstance(p, dict) and p.get("type") == "tool_result" for p in content)
+            if not is_tool_result and not d.get("isMeta"):
+                turn = None  # a new request from the user starts a new turn
             if isinstance(content, str):
-                pending.append(Block(USER_KIND, content.strip().splitlines()[0][:48] if content.strip() else "", call, len(content) / CHARS_PER_TOKEN))
+                pending.append(Block(USER_KIND, _first_line(content), call, len(content) / CHARS_PER_TOKEN))
                 continue
             for part in content if isinstance(content, list) else []:
                 if not isinstance(part, dict):
@@ -185,7 +246,7 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                     pending.append(Block(name, _label(name, inp), call, est, is_image=image))
                 elif part.get("type") == "text":
                     text = part.get("text") or ""
-                    pending.append(Block(USER_KIND, text.strip().splitlines()[0][:48] if text.strip() else "", call, len(text) / CHARS_PER_TOKEN))
+                    pending.append(Block(USER_KIND, _first_line(text), call, len(text) / CHARS_PER_TOKEN))
     price = price or price_for(model)
     r_eff = price.read_mult + miss_rate * (price.write_1h_mult - price.read_mult)
     ends = sorted(set(compaction_at)) + [call]
@@ -194,29 +255,61 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
         b.carried = max(end - b.call - 1, 0)
         b.carry_cost = b.tokens * b.carried * r_eff
         b.carry_usd = price.usd(b.carry_cost) or 0.0
+    for tn in turns:
+        tn.history_usd = price.usd(tn.calls * tn.context * r_eff) or 0.0
+        tn.subagent_saving_usd = price.usd(tn.calls * max(tn.context - SUBAGENT_START, 0) * r_eff) or 0.0 if tn.calls >= LONG_TURN else 0.0
     sid = os.path.splitext(os.path.basename(path))[0]
-    return Diet(sid, call, peak, blocks, len(set(compaction_at)))
+    return Diet(sid, call, peak, blocks, turns, len(set(compaction_at)), out_tokens, think_tokens, dict(effort))
 
 
-def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Tuple[Dict[str, dict], List[Tuple[str, Block]], int]:
-    """Per-kind totals and the costliest single blocks across many sessions."""
-    totals: Dict[str, dict] = {}
-    top: List[Tuple[str, Block]] = []
-    sessions = 0
+@dataclass
+class Aggregate:
+    kinds: Dict[str, dict]
+    top: List[Tuple[str, Block]]
+    sessions: int = 0
+    calls: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    long_turns: int = 0
+    long_turn_calls: int = 0
+    history_usd: float = 0.0
+    subagent_saving_usd: float = 0.0
+    effort: Dict[Tuple[str, str], List[int]] = field(default_factory=dict)
+    bash_blocks: List[Tuple[str, Block]] = field(default_factory=list)  # every Bash result, for cap backtests
+
+
+def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Aggregate:
+    """Per-kind totals, the costliest single blocks and the turn structure across many sessions."""
+    agg = Aggregate({}, [])
     for t in transcripts:
         if t.is_subagent or len(t.steps) < 5:
             continue
-        sessions += 1
         d = read_diet(t.path, miss_rate=miss_rate)
+        agg.sessions += 1
+        agg.calls += d.calls
+        agg.output_tokens += d.output_tokens
+        agg.thinking_tokens += d.thinking_tokens
         for kind, v in d.by_kind().items():
-            agg = totals.setdefault(kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "images": 0, "max": 0.0})
+            a = agg.kinds.setdefault(kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "images": 0, "max": 0.0})
             for k in ("count", "tokens", "carry_usd", "images"):
-                agg[k] += v[k]
-            agg["max"] = max(agg["max"], v["max"])
-        top.extend((d.session_id, b) for b in sorted((b for b in d.blocks if b.kind != SYSTEM_KIND),
-                                                       key=lambda b: -b.carry_usd)[:10])
-    top.sort(key=lambda sb: -sb[1].carry_usd)
-    return dict(sorted(totals.items(), key=lambda kv: -kv[1]["carry_usd"])), top[:10], sessions
+                a[k] += v[k]
+            a["max"] = max(a["max"], v["max"])
+        agg.bash_blocks.extend((d.session_id, b) for b in d.blocks if b.kind == "Bash")
+        agg.top.extend((d.session_id, b) for b in sorted((b for b in d.blocks if b.kind != SYSTEM_KIND),
+                                                          key=lambda b: -b.carry_usd)[:10])
+        for tn in d.long_turns:
+            agg.long_turns += 1
+            agg.long_turn_calls += tn.calls
+            agg.history_usd += tn.history_usd
+            agg.subagent_saving_usd += tn.subagent_saving_usd
+        for k, (n, th) in d.effort.items():
+            e = agg.effort.setdefault(k, [0, 0])
+            e[0] += n
+            e[1] += th
+    agg.kinds = dict(sorted(agg.kinds.items(), key=lambda kv: -kv[1]["carry_usd"]))
+    agg.top.sort(key=lambda sb: -sb[1].carry_usd)
+    agg.top = agg.top[:10]
+    return agg
 
 
 TIPS = {
@@ -224,16 +317,22 @@ TIPS = {
             "its transcript stays out of yours.",
     "Bash": "Pipe through `tail -n 40` / `head`, redirect long logs to a file and `kvleak pointer` it, and run long "
             "jobs in the background so their output is not pasted back.",
+    "Bash" + INPUT_SUFFIX: "Every inline script or heredoc the model sends to Bash is re-read on every later call. Put "
+                           "multi-line scripts in a file once and run the file; iterate with Edit, not by resending.",
+    "Write" + INPUT_SUFFIX: "A Write carries the whole file; an Edit carries only the change. Generate big data files "
+                            "with a script instead of writing them out literally.",
     USER_KIND: "Pasted text is carried on every call. Save it to a file and reference the path; the model reads the "
                "part it needs when it needs it.",
-    ASSISTANT_KIND: "The replies themselves are re-sent on every later call. Ask for terse answers in tool loops, keep "
-                    "reports in files, and lower `/effort` for routine steps.",
+    TEXT_KIND: "Replies are re-sent on every later call. Ask for terse answers in tool loops and keep reports in files.",
+    THINKING_KIND: "Current models keep every turn's thinking in context until a compaction. Lower `/effort` for "
+                   "routine work, give routine skills and subagents `effort: low` in their frontmatter, and let "
+                   "`kvleak tune` set the auto-compact window.",
+    SYSTEM_KIND: "Every session and subagent starts by paying for this. Trim CLAUDE.md, drop MCP servers you do not "
+                 "use, and keep tool schemas deferred (ENABLE_TOOL_SEARCH).",
     "Agent": "Subagent reports are small; the cost is in how many you run. Reuse one with SendMessage instead of "
              "spawning again.",
     "WebFetch": "Ask the fetch for the one fact you need; a page summary is much smaller than the page.",
     "WebSearch": "Narrow the query or ask for fewer results; each result set lands in the context whole.",
-    SYSTEM_KIND: "Every session and subagent starts by paying for this. Trim CLAUDE.md, drop MCP servers you do not "
-                 "use, and keep tool schemas deferred (ENABLE_TOOL_SEARCH).",
 }
 
 
@@ -249,9 +348,13 @@ def tips(kinds: Dict[str, dict], limit: int = 3) -> List[str]:
             continue  # mostly images, and those are already capped by the API
         tip = TIPS.get(kind) or "Single results up to {} tokens from {}. Ask for summaries or counts; cap MCP output " \
                                 "with MAX_MCP_OUTPUT_TOKENS.".format(int(v["max"]), kind)
-        out.append("{} is {:.0%} of what entered the context. {}".format(
-            kind[0].upper() + kind[1:] + (" results" if kind not in PLAIN_KINDS else ""),
-            v["tokens"] / total, tip))
+        out.append("{} is {:.0%} of what entered the context. {}".format(kind_label(kind), v["tokens"] / total, tip))
     if not out:
         out.append("No single source dominates. The remaining lever is compaction: see `kvleak tune`.")
     return out
+
+
+def kind_label(kind: str) -> str:
+    if kind in PLAIN_KINDS or kind.endswith(INPUT_SUFFIX):
+        return kind[0].upper() + kind[1:]
+    return kind + " results"

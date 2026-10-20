@@ -34,7 +34,7 @@ from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
 SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "breakeven", "statusline", "pointer", "models"}
-TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl")
+TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
 
 
@@ -228,32 +228,30 @@ def cmd_advise(args) -> int:
 
 
 def cmd_diet(args) -> int:
-    from .diet import PLAIN_KINDS, SYSTEM_KIND, aggregate, read_diet, tips
+    from .diet import SYSTEM_KIND, aggregate, kind_label, read_diet, tips
 
     c = fmt.c
     miss = _profile(args).miss_rate
-    label = lambda k: k if k in PLAIN_KINDS else k + " results"  # noqa: E731
     if args.all:
         since = args.since if args.since is not None else time.time() - 30 * 86400
         transcripts = load_all(_default_paths(args), args.format, since, args.project)
-        kinds, top, n = aggregate(transcripts, miss)
-        if not kinds:
+        agg = aggregate(transcripts, miss)
+        if not agg.kinds:
             print("kvleak: no interactive sessions in that window", file=sys.stderr)
             return 1
+        kinds, top = agg.kinds, agg.top[:args.top]
         total = sum(v["tokens"] for v in kinds.values())
-        print(c("\n  What filled the context · {} sessions · {} tokens entered · carrying it cost {}".format(
-            n, fmt.tok(total), fmt.usd(sum(v["carry_usd"] for v in kinds.values()))), "bold"))
-        rows = [["source", "items", "tokens", "share", "biggest", "carried cost"]]
-        for k, v in list(kinds.items())[:10]:
-            rows.append([label(k), f"{v['count']:,}", fmt.tok(v["tokens"]), fmt.pct(v["tokens"] / total),
-                         fmt.tok(v["max"]), fmt.usd(v["carry_usd"])])
-        print(fmt.table(rows, "lrrrrr"))
+        print(c("\n  What filled the context · {} sessions · {} calls · {} tokens entered · carrying it cost {}".format(
+            agg.sessions, f"{agg.calls:,}", fmt.tok(total), fmt.usd(sum(v["carry_usd"] for v in kinds.values()))), "bold"))
+        _diet_table(kinds, total, args.top)
         if top:
             print(c("\n  Costliest single items", "bold"))
             rows = [["session", "source", "what", "tokens", "carried", "cost"]]
-            for sid, b in top[:args.top]:
-                rows.append([sid[:8], b.kind, b.label, fmt.tok(b.tokens), "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
+            for sid, b in top:
+                rows.append([sid[:8], kind_label(b.kind), b.label, fmt.tok(b.tokens), "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
             print(fmt.table(rows, "lllrrr"))
+        _diet_turns(agg.long_turns, agg.long_turn_calls, agg.history_usd, agg.subagent_saving_usd, None)
+        _diet_thinking(agg.output_tokens, agg.thinking_tokens, agg.effort)
     else:
         paths = _default_paths(args)
         if args.id:
@@ -272,25 +270,63 @@ def cmd_diet(args) -> int:
         total = d.total_tokens or 1
         print(c("\n  What filled the context · {} · {} calls · peak {} · {} compactions · carrying it cost {}".format(
             d.session_id[:8], d.calls, fmt.tok(d.peak), d.compactions, fmt.usd(d.carry_usd)), "bold"))
-        rows = [["source", "items", "tokens", "share", "biggest", "carried cost"]]
-        for k, v in list(kinds.items())[:10]:
-            rows.append([label(k), f"{v['count']:,}", fmt.tok(v["tokens"]), fmt.pct(v["tokens"] / total),
-                         fmt.tok(v["max"]), fmt.usd(v["carry_usd"])])
-        print(fmt.table(rows, "lrrrrr"))
+        _diet_table(kinds, total, args.top)
         top = sorted((b for b in d.blocks if b.kind != SYSTEM_KIND), key=lambda b: -b.carry_usd)[:args.top]
         if top:
             print(c("\n  Costliest single items", "bold"))
             rows = [["call", "source", "what", "tokens", "carried", "cost"]]
             for b in top:
-                rows.append([str(b.call), b.kind, b.label + (" (image)" if b.is_image else ""), fmt.tok(b.tokens),
+                rows.append([str(b.call), kind_label(b.kind), b.label + (" (image)" if b.is_image else ""), fmt.tok(b.tokens),
                              "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
             print(fmt.table(rows, "rllrrr"))
+        long = d.long_turns
+        _diet_turns(len(long), sum(t.calls for t in long), sum(t.history_usd for t in long),
+                    sum(t.subagent_saving_usd for t in long), long[:5])
+        _diet_thinking(d.output_tokens, d.thinking_tokens, d.effort)
     print(c("\n  How to shrink it", "bold"))
     for i, tip in enumerate(tips(kinds), 1):
         print("  {}. {}".format(i, tip))
-    print(c("  Tokens are calibrated to the API's usage numbers; images are priced by pixels. "
+    print(c("  Tokens are calibrated to the API's usage numbers (thinking exact, the rest by size; images by pixels). "
             "Carried cost = tokens × calls it stayed in the context × cache-read price.", "grey"))
     return 0
+
+
+def _diet_table(kinds: dict, total: float, top: int) -> None:
+    from .diet import kind_label
+
+    rows = [["source", "items", "tokens", "share", "biggest", "carried cost"]]
+    for k, v in list(kinds.items())[:max(top, 8)]:
+        rows.append([kind_label(k), f"{v['count']:,}", fmt.tok(v["tokens"]), fmt.pct(v["tokens"] / total),
+                     fmt.tok(v["max"]), fmt.usd(v["carry_usd"])])
+    print(fmt.table(rows, "lrrrrr"))
+
+
+def _diet_turns(n: int, calls: int, history_usd: float, saving_usd: float, examples) -> None:
+    from .diet import LONG_TURN
+
+    c = fmt.c
+    if not n:
+        return
+    print(c("\n  Long turns (≥{} calls before you spoke again)".format(LONG_TURN), "bold"))
+    print("  {} turns · {} calls · re-reading the history they started with cost {} · in fresh subagents: {}".format(
+        n, f"{calls:,}", fmt.usd(history_usd), c("−" + fmt.usd(saving_usd), "green", "bold")))
+    if examples:
+        rows = [["starts at call", "calls", "context then", "history re-read", "as a subagent"]]
+        for t in examples:
+            rows.append([str(t.start), str(t.calls), fmt.tok(t.context), fmt.usd(t.history_usd), "−" + fmt.usd(t.subagent_saving_usd)])
+        print(fmt.table(rows, "rrrrr"))
+
+
+def _diet_thinking(output: int, thinking: int, effort: dict) -> None:
+    c = fmt.c
+    if not output or not thinking:
+        return
+    parts = []
+    for (model, level), (n, th) in sorted(effort.items(), key=lambda kv: -kv[1][0])[:4]:
+        if n >= 20:
+            parts.append("{} at {}: {:.0f}/call".format(model.replace("claude-", ""), level, th / n))
+    print(c("\n  Thinking", "bold") + "  {} of {} output tokens ({}); kept in context until compaction on current models{}".format(
+        fmt.tok(thinking), fmt.tok(output), fmt.pct(thinking / output), (" · " + " · ".join(parts)) if parts else ""))
 
 
 def _settings_path() -> Path:
@@ -416,7 +452,39 @@ def cmd_tune(args) -> int:
         row("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", now_label, "100k" if gain >= 1 else now_label, max(gain, 0.0), why,
             env_key="CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", value="100000")
 
-    # 4. subagent cold starts: no setting to flip, but three knobs in the agent file.
+    # 4. what enters the context per call: Bash output cap and effort (thinking kept in context).
+    from .diet import THINKING_KIND, aggregate
+
+    agg = aggregate(main_t, prof.miss_rate)
+    bash = agg.kinds.get("Bash")
+    if bash and bash["count"]:
+        now_cap = int(env.get("BASH_MAX_OUTPUT_LENGTH") or settings.get("bashOutputMaxChars") or 30_000)
+        best_cap, best_gain = now_cap, 0.0
+        for cap in (16_000, 8_000):
+            if cap >= now_cap:
+                continue
+            gain = _bash_cap_saving(agg, cap)
+            if gain > best_gain:
+                best_cap, best_gain = cap, gain
+        row("bashOutputMaxChars", f"{now_cap:,}", f"{best_cap:,}", best_gain,
+            "Bash results are {} of what entered the context; longer output goes to a file the model can still read".format(
+                fmt.pct(bash["tokens"] / max(sum(v["tokens"] for v in agg.kinds.values()), 1))),
+            key="bashOutputMaxChars", value=best_cap)
+    think = agg.kinds.get(THINKING_KIND)
+    if think and agg.thinking_tokens:
+        carry_per_tok = think["carry_usd"] / max(think["tokens"], 1)
+        for mdl in {m for m, _ in agg.effort}:
+            levels = {lvl: (n, th / n) for (m, lvl), (n, th) in agg.effort.items() if m == mdl and n >= 50}
+            if "high" in levels and "medium" in levels and levels["high"][1] > levels["medium"][1]:
+                n_high, per_high = levels["high"]
+                delta = (per_high - levels["medium"][1]) * n_high
+                p = price_for(mdl)
+                saving = (p.usd(delta * p.output_mult) or 0.0) + delta * carry_per_tok
+                row("effortLevel ({})".format(mdl.replace("claude-", "")), "high on {:,} calls".format(n_high), "medium", saving,
+                    "thinking {:.0f}/call at high vs {:.0f} at medium, billed 5× then re-read until compaction · quality trade-off: "
+                    "set `effort:` per skill/subagent instead".format(per_high, levels["medium"][1]))
+
+    # 5. subagent cold starts: no setting to flip, but three knobs in the agent file.
     sub = subagent_starts(transcripts, price_for)
     if sub.count:
         why = "{} on first calls; {} of {} started with nothing cached".format(fmt.usd(sub.cost_usd), sub.cold, sub.count)
@@ -447,6 +515,16 @@ def cmd_tune(args) -> int:
     else:
         print("  Your settings already match your history. Nothing to change.")
     return 0
+
+
+def _bash_cap_saving(agg, cap_chars: int) -> float:
+    """Carried cost of the part of every Bash result beyond `cap_chars` (which would go to a file instead)."""
+    cap = cap_chars / 4.0
+    saving = 0.0
+    for _, b in agg.bash_blocks:
+        if b.est > cap:
+            saving += b.carry_usd * (1 - cap / b.est)
+    return saving
 
 
 def _window_label(since: float) -> str:

@@ -139,19 +139,43 @@ API's usage numbers (method in [how-it-works §8](how-it-works.md#8-context-diet
 
 | source | items | tokens | share | carried cost |
 |---|---:|---:|---:|---:|
-| assistant output (replies, tool calls, in-turn thinking) | 9,782 | 12.3M | **59.0%** | **$566** |
-| Bash results | 7,750 | 4.3M | **20.7%** | $211 |
-| your messages | 1,890 | 1.6M | 7.6% | $65 |
+| Bash results (what came back from the shell) | 7,760 | 6.1M | **29.2%** | **$298** |
+| Bash inputs (scripts and heredocs the model sent to the shell) | 7,761 | 4.5M | **21.5%** | **$205** |
+| thinking (exact; kept in context until compaction on current models) | 6,472 | 3.0M | 14.2% | $140 |
+| your messages | 1,891 | 2.0M | 9.6% | $82 |
 | system prompt & tools (≈40k per session) | 33 | 1.3M | 6.3% | $62 |
-| Read results (many of them screenshots, priced by pixels) | 421 | 857k | 4.1% | $36 |
-| WebSearch / WebFetch / Agent / everything else | ≈1,200 | 440k | 2.1% | $16 |
-| **total** | | **20.8M** | | **$956** |
+| Write inputs (files the model wrote out) | 349 | 999k | 4.8% | $47 |
+| Read results (many of them screenshots, priced by pixels) | 421 | 925k | 4.4% | $39 |
+| assistant text | 3,761 | 875k | 4.2% | $37 |
+| everything else | ≈1,300 | 300k | 1.4% | $11 |
+| **total** | | **20.8M** | | **$958** |
 
-The expected villain, whole-file reads, is 4%. The actual one is the model's
-own output: in a tool loop of hundreds of calls, every reply and every
-thinking block of that turn is re-sent on every call until the turn ends. The
-biggest single blocks are pasted documents (40k tokens carried for 500 calls
-≈ $6 each) and `cat` of generated tables.
+Thinking is exact (`usage.output_tokens_details.thinking_tokens`); the other
+rows share the remaining measured growth in proportion to their size, so their
+split is approximate but their sum is not. (0.4.0 weighted replies by their
+full `output_tokens` and attributed 59% to "assistant output"; that was an
+artefact of the estimate, corrected here.)
+
+The expected villain, whole-file reads, is 4%. Half of the context is the
+shell: the output that came back and the scripts that went in. The biggest
+single blocks are pasted documents (40k tokens carried for 500 calls ≈ $6
+each) and `cat` of generated tables.
+
+**Thinking per call, from the same history.** Opus 5.5: 238 tokens at
+`medium`, 299 at `high`; Fable 5.1 at `high`: 497. Thinking stays in context
+on these models, so it is billed 5× as output and then re-read on every call
+until a compaction. Even so, running every `high` Opus call at `medium` would
+have saved **$3** in 30 days. Effort is not the lever here; compaction is.
+
+**Long turns.** 114 tool loops ran 20 or more calls before the user spoke
+again (longest: 246). Each call re-read the history the loop started with:
+4,707 calls, **$351**. Had each loop run in a fresh subagent (≈20k starting
+context, report back a few hundred tokens), **$319** of that would not have
+been spent, and the loop's own output would have accumulated in the subagent's
+context instead of the main one.
+
+**`bashOutputMaxChars`.** Capping inline shell output at 8,000 characters
+(the rest goes to a file the model can still read) would have saved **$32**.
 
 **Dead writes.** $207 of the 30-day bill was the cache-write premium on tokens
 nothing ever read back: $206 of it in one-shot `claude -p` runs, where every

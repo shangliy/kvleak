@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (2026-10-20)
+
+- `kvleak diet` splits the model's own output into **thinking** (exact, from `usage.output_tokens_details`),
+  **tool-call inputs** per tool (the scripts sent to Bash, the files Written) and **text**, and reports the **turn
+  structure**: tool loops of 20+ calls, what re-reading their starting history cost, and what running them in a
+  fresh subagent would have saved. Shows thinking per call by model and effort level from your own history.
+- Correction: 0.4.0 attributed 59% of context growth to "assistant output" by weighting replies with their full
+  `output_tokens`. With thinking measured exactly, the maintainer's history is 29% shell output, 21% scripts sent to
+  the shell, 14% thinking, 10% pasted text, 6% system prompt, 5% Written files, 4% file reads.
+- `kvleak tune` adds `bashOutputMaxChars` (backtested cap on shell output) and an `effortLevel` row that prices
+  high→medium from your own thinking-per-call numbers (on this history: $3 per 30 days, so not a lever).
+
 ## 0.4.0 (2026-10-20)
 
 - `kvleak diet`: what filled the context (tool results by tool, your messages, the assistant's replies, the system

@@ -64,7 +64,8 @@ No API key, no config, no network calls, no dependencies. It reads
 | 6-worker swarm, pointers + warm workers + pinned models | **−86%** input cost in simulation |
 | Compaction advisor replayed on real history (compact only above 200k) | **−58%** input spend with 98 compactions in 30 days (≈3 per session); **−40%** with 23 above 400k |
 | `kvleak tune --apply` on the same 30 days | **−$909 (−45%)** from four settings Claude Code already has; auto-compact at 200k instead of ~967k is **−58%** alone |
-| What filled the context (`kvleak diet --all`, 33 sessions, 20.8M tokens) | **59%** was the assistant's own replies and in-turn thinking, **21%** shell output, 8% pasted text, 6% the ~40k system prompt; whole-file reads only 4% |
+| What filled the context (`kvleak diet --all`, 33 sessions, 20.8M tokens) | **29%** shell output, **21%** scripts the model sent to the shell, **14%** thinking (kept in context on current models), 10% pasted text, 6% the ~40k system prompt; whole-file reads only 4% |
+| Long tool loops (≥20 calls) replayed as subagents | 114 loops re-read their starting history 4,707 times for $351; in fresh subagents **−$319** |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -198,30 +199,39 @@ calls it stayed × cache-read price.
 ```text
 $ kvleak diet --all
 
-  What filled the context · 33 sessions · 20.8M tokens entered · carrying it cost $956
+  What filled the context · 33 sessions · 9,824 calls · 20.8M tokens entered · carrying it cost $958
   source                 items  tokens  share  biggest  carried cost
-  assistant output       9,782   12.3M  59.0%    27.2k       $566.41
-  Bash results           7,750    4.3M  20.7%    15.4k       $210.63
-  your messages          1,890    1.6M   7.6%    49.7k        $64.84
-  system prompt & tools     33    1.3M   6.3%    61.6k        $61.93
-  Read results             421    857k   4.1%    25.0k        $36.08
+  Bash results           7,760    6.1M  29.2%    15.9k       $297.87
+  Bash inputs            7,761    4.5M  21.5%    10.2k       $205.07
+  Thinking               6,472    3.0M  14.2%    12.4k       $140.21
+  Your messages          1,891    2.0M   9.6%    49.7k        $82.10
+  System prompt & tools     33    1.3M   6.3%    61.6k        $61.91
+  Write inputs             349    999k   4.8%    27.1k        $46.95
+  Read results             421    925k   4.4%    25.2k        $38.88
+  Assistant text         3,761    875k   4.2%     6.4k        $37.27
 
-  Costliest single items
-  session   source  what                             tokens    carried   cost
-  751a482b  Read    body8.txt                         24.1k  568 calls  $4.07
-  5701e1a7  Bash    cat paper_www/gen/numbers*.tex    15.4k  502 calls  $2.30
+  Long turns (≥20 calls before you spoke again)
+  114 turns · 4,707 calls · re-reading the history they started with cost $351.12 · in fresh subagents: −$318.66
+
+  Thinking  3.0M of 10.1M output tokens (29.4%); kept in context until compaction on current models
+            · opus-5-5 at medium: 238/call · fable-5-1 at high: 497/call · opus-5-5 at high: 299/call
 
   How to shrink it
-  1. Assistant output is 59% of what entered the context. The replies themselves are re-sent on every
-     later call. Ask for terse answers in tool loops, keep reports in files, and lower `/effort` for routine steps.
-  2. Bash results is 21% of what entered the context. Pipe through `tail -n 40` / `head`, redirect long
+  1. Bash results is 29% of what entered the context. Pipe through `tail -n 40` / `head`, redirect long
      logs to a file and `kvleak pointer` it, and run long jobs in the background ...
+  2. Bash inputs is 21% of what entered the context. Every inline script or heredoc the model sends to
+     Bash is re-read on every later call. Put multi-line scripts in a file once and run the file ...
 ```
 
-The surprise in that table: the model's **own replies and in-turn thinking are
-the biggest thing it re-reads**, not file contents. Long tool loops carry every
-thought from the turn until the turn ends. That makes `/effort` and terse
-replies a context lever, not just an output-token lever.
+Two surprises in that table. Half of the context is the **shell**: what came
+back from it (29%) and the scripts the model sent to it (21%), and both have
+cheap fixes (`tail`, a file instead of a heredoc, `bashOutputMaxChars`, which
+`kvleak tune` now backtests). And on current models **thinking stays in the
+context until a compaction**, so it is 14% of what gets re-read; but on this
+history dropping `/effort` from high to medium would have saved only $3, so
+the lever is compaction, not effort. The biggest single number is the **long
+turns**: 114 tool loops of 20+ calls re-read the history they started with
+4,707 times. Run those loops in a fresh subagent and $319 of that goes away.
 
 ## Should I keep this cache alive?
 

@@ -82,17 +82,25 @@ $ kvleak tune
 ```text
 $ kvleak diet --all
 
-  What filled the context · 33 sessions · 20.8M tokens entered · carrying it cost $956
+  What filled the context · 33 sessions · 9,824 calls · 20.8M tokens entered · carrying it cost $958
   source                 items  tokens  share  biggest  carried cost
-  assistant output       9,782   12.3M  59.0%    27.2k       $566.41
-  Bash results           7,750    4.3M  20.7%    15.4k       $210.63
-  your messages          1,890    1.6M   7.6%    49.7k        $64.84
-  system prompt & tools     33    1.3M   6.3%    61.6k        $61.93
-  Read results             421    857k   4.1%    25.0k        $36.08
+  Bash results           7,760    6.1M  29.2%    15.9k       $297.87
+  Bash inputs            7,761    4.5M  21.5%    10.2k       $205.07
+  Thinking               6,472    3.0M  14.2%    12.4k       $140.21
+  Your messages          1,891    2.0M   9.6%    49.7k        $82.10
+  System prompt & tools     33    1.3M   6.3%    61.6k        $61.91
+  Write inputs             349    999k   4.8%    27.1k        $46.95
+  Read results             421    925k   4.4%    25.2k        $38.88
+
+  Long turns (≥20 calls before you spoke again)
+  114 turns · 4,707 calls · re-reading the history they started with cost $351.12 · in fresh subagents: −$318.66
 ```
 
-最意外的一点：**模型自己的回复和回合内的思考，才是它反复重读的最大头**，不是文件内容。
-长工具循环会把整个回合的思考一直带到回合结束。所以 `/effort` 和简短回复不只是省输出 Token，也是在省上下文。
+两个意外。一半的上下文是 **shell**：从 shell 回来的输出（29%）和模型发给 shell 的脚本（21%），两者都有便宜的解法
+（`tail`、脚本写进文件而不是 heredoc、`bashOutputMaxChars`——`kvleak tune` 现在会回测它）。
+另外，当前模型会把**思考一直留在上下文里直到压缩**，所以它占了重读量的 14%；但在这份历史上把 `/effort` 从 high 降到 medium 只能省 $3，
+真正的杠杆是压缩而不是 effort。最大的单项数字是**长回合**：114 个超过 20 次调用的工具循环，把它们开始时的历史重读了 4,707 次。
+把这类循环放进新的子 Agent 里跑，$319 就省下来了。
 
 ## 未命中原因分类
 

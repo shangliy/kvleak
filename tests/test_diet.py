@@ -5,7 +5,16 @@ import zlib
 from conftest import T0, claude_line
 
 from kvleak.cli import main
-from kvleak.diet import ASSISTANT_KIND, IMAGE_MAX_TOKENS, SYSTEM_KIND, USER_KIND, _image_tokens, read_diet, tips
+from kvleak.diet import (
+    IMAGE_MAX_TOKENS,
+    SYSTEM_KIND,
+    TEXT_KIND,
+    THINKING_KIND,
+    USER_KIND,
+    _image_tokens,
+    read_diet,
+    tips,
+)
 
 
 def _png(w, h):
@@ -43,14 +52,35 @@ def test_calibration_matches_prompt_growth(write_jsonl):
     d = read_diet(str(_session(write_jsonl)))
     assert d.calls == 5 and d.peak == 22_900
     kinds = d.by_kind()
-    assert abs(kinds["Bash"]["tokens"] - 10_000) < 1  # the 10,400 growth split 10k:400 between result and reply
-    assert abs(kinds[ASSISTANT_KIND]["tokens"] - (400 + 300 + 100 + 100)) < 1
-    assert abs(kinds["Read"]["tokens"] - 2_000) < 1
-    assert kinds[USER_KIND]["tokens"] < 10 and abs(kinds[SYSTEM_KIND]["tokens"] - 10_000) < 10  # first prompt is the system prompt
+    # the 10,400 growth at call 1 is split between the 40k-char result and the tiny command
+    assert abs(kinds["Bash"]["tokens"] - 10_400) < 100 and kinds["Bash inputs"]["count"] == 1
+    assert abs(kinds["Read"]["tokens"] - 2_300) < 100
+    assert kinds[USER_KIND]["tokens"] < 10 and abs(kinds[SYSTEM_KIND]["tokens"] - 10_000) < 50  # first prompt is the system prompt
+    assert kinds[TEXT_KIND]["count"] == 3
     bash = next(b for b in d.blocks if b.kind == "Bash")
     assert bash.label == "pytest -q" and bash.call == 1 and bash.carried == 3 and bash.carry_usd > 0
-    read = next(b for b in d.blocks if b.kind == "Read")
-    assert read.label == "big.py"
+    assert next(b for b in d.blocks if b.kind == "Bash inputs").label == "pytest -q"
+    assert next(b for b in d.blocks if b.kind == "Read").label == "big.py"
+    assert len(d.turns) == 1 and d.turns[0].calls == 5 and not d.long_turns
+
+
+def test_thinking_is_exact_and_turns_split_on_user_text(write_jsonl):
+    lines = [_user(0, "go")]
+    for i in range(25):  # one long tool loop...
+        a = _assistant(i, i + 1, 50_000 + i * 1_000, 800, [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "ls"}}])
+        a["message"]["usage"]["output_tokens_details"] = {"thinking_tokens": 500}
+        a["effort"] = "high"
+        lines.append(a)
+        lines.append(_user(0, [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x" * 2_000}]))
+    lines.append(_user(0, "thanks, now the other thing"))  # ...then a new request
+    lines.append(_assistant(99, 40, 80_000, 100, [{"type": "text", "text": "ok"}]))
+    d = read_diet(str(write_jsonl(lines)))
+    kinds = d.by_kind()
+    assert d.thinking_tokens == 25 * 500 and abs(kinds[THINKING_KIND]["tokens"] - 25 * 500) < 1  # all re-sent later
+    assert d.effort[("claude-opus-5-5", "high")] == [25, 12_500]
+    assert len(d.turns) == 2 and d.turns[0].calls == 25 and d.turns[1].calls == 1
+    long = d.long_turns
+    assert len(long) == 1 and long[0].context == 50_000 and long[0].history_usd > long[0].subagent_saving_usd > 0
 
 
 def test_compaction_stops_the_carry(write_jsonl):
@@ -79,7 +109,7 @@ def test_images_are_priced_by_pixels():
 
 def test_tips_name_the_dominant_source():
     kinds = {"Bash": {"count": 10, "tokens": 80_000, "carry_usd": 1, "images": 0, "max": 9_000},
-             ASSISTANT_KIND: {"count": 10, "tokens": 5_000, "carry_usd": 0.1, "images": 0, "max": 500}}
+             TEXT_KIND: {"count": 10, "tokens": 5_000, "carry_usd": 0.1, "images": 0, "max": 500}}
     out = tips(kinds)
     assert len(out) == 1 and out[0].startswith("Bash results is 94%")
     assert "compaction" in tips({})[0]
@@ -94,3 +124,4 @@ def test_diet_cli(write_jsonl, tmp_path, monkeypatch, capsys):
     assert "Bash results" in out and "pytest -q" in out and "How to shrink it" in out
     assert main(["diet", "--all", "--path", root, "--since", T0.isoformat(), "--no-color"]) == 0
     assert "1 sessions" in capsys.readouterr().out
+    assert main(["diet", str(p), "--path", root, "--no-color"]) == 0 and "Thinking" not in capsys.readouterr().out

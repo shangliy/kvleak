@@ -107,6 +107,8 @@ your last 30 days under each candidate value and reports the difference:
 | `subagentPromptCacheTtl` | Same replay over subagent transcripts. |
 | `CLAUDE_CODE_PROMPT_CACHE_TTL` for `claude -p` batches | One-shot runs share a prefix across runs, so the replay orders them by time and rewrites the shared prefix whenever the gap between runs exceeds the TTL. The prompt itself is written once and never read back under either TTL, so the cheaper write usually wins. |
 | `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | For every idle gap of 54 min or more in a 1h-TTL session: the rebuild that idle compaction avoids minus what the compaction costs, at the default 200k threshold and at 100k. |
+| `bashOutputMaxChars` | For every Bash result longer than the cap: the carried cost of the part beyond it (Claude Code puts the rest in a file the model can still read). Tried at 16k and 8k characters against the current 30k default. |
+| `effortLevel` | Not applied, only priced: if the same model ran at both `high` and `medium` in the window, the extra thinking per call at `high` × calls at `high`, billed as output (5×) plus the carried cost per thinking token observed in the same history. |
 
 **Parallel subagent launches.** Subagents started together all send their
 first request before any of them has finished writing the shared prefix
@@ -136,14 +138,23 @@ tools, CLAUDE.md). `diet` turns each into a record with:
   the next compaction or the end of the session.
 * **carried cost** — `tokens × carried × (read + miss_rate · (write − read))`.
 
-The assistant's reply is one such block. Its weight comes out of the same
-calibration, not from `output_tokens`, because thinking from earlier turns is
-stripped before the next user turn while thinking *within* a tool-use turn is
-re-sent on every call of that turn. In long tool loops that is most of the
-growth.
+The assistant's reply is split into three kinds of block: **thinking**, whose
+size is exact (`usage.output_tokens_details.thinking_tokens`) and which
+current models (Opus 4.5+, Sonnet 4.6+, Haiku 5.5, Fable) keep in context
+until a compaction; **`<Tool>` inputs**, the arguments the model sent to each
+tool (a heredoc script to Bash, a whole file to Write), estimated from their
+length; and **assistant text**. Exact blocks keep their size; the rest share
+whatever growth remains.
 
-`--all` sums the kinds over every interactive session in the window and keeps
-the ten costliest single blocks.
+**Turns.** A turn starts at a user message that is not a tool result and runs
+until the next one. For every turn of 20+ calls, `diet` reports the history
+re-read cost (`calls × context at the first call × r_eff`) and the subagent
+counterfactual (`calls × (context − 20k) × r_eff`): what a fresh subagent with
+a 20k starting context would have paid for the same loop.
+
+`--all` sums the kinds over every interactive session in the window, keeps the
+ten costliest single blocks, totals the long turns, and reports thinking per
+call by model and effort level (the `effort` field on each transcript line).
 
 ## Caveats
 
