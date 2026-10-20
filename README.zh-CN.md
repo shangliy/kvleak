@@ -24,6 +24,7 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 - `kvleak tune --apply`：同样的 30 天，四个 Claude Code 自带的设置合计 **−$909（−45%）**
 - 机械链（连续 3 次以上 `ls`/`cat`/`grep`/小读取、中间没有真正的决策）：**493 条，占 9,924 次调用中的 2,235 次**；合成脚本最多 **−$160**
 - `kvleak refine`：5 条写进 CLAUDE.md 的规则，每条都附带证据，合计覆盖 **≈$640 / 30 天** 的可测量浪费
+- A/B benchmark（`bench/`，Opus 5.5 上 72 次 `claude -p`）：**每个 arm 准确度都是 1.00**；输出 1.7 万行和 13 万行的两个任务成本 −16% 到 −17%，四个短任务在噪音范围内（±5%）。大头要在长会话里才能省
 
 ## 功能
 
@@ -159,6 +160,10 @@ $ kvleak refine
 一周后 `kvleak refine --probe` 把之后的会话和之前的做对比，每条规则对应一个指标（每次 Bash 结果的 token 数、
 机械链里的调用占比、20+ 次调用循环里的调用占比……），告诉你哪条规则的数字动了、哪条没动。这就是 Harness² 的
 probe 步骤，只不过跑在你的真实会话上而不是 benchmark 上；它说明行为有没有变，不证明是规则导致的。
+
+**这些会不会损失准确度？** `bench/` 用自动生成、自动判分的任务跑 `claude -p`，分别开关 hooks 和规则。Opus 5.5 上 72 次运行，
+每个 arm 每个任务都是满分；在 shell 输出特别长的两个任务上成本降了 16% 到 17%，短任务上没有可测量的差别。
+详见 [docs/benchmarks.md §8](docs/benchmarks.md#8-ab-benchmark-accuracy-and-cost-with-and-without-kvleak)。
 
 ## 未命中原因分类
 

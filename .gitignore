@@ -8,3 +8,11 @@ build/
 *.html
 !docs/**/*.html
 .pypirc
+
+# benchmark runs: keep only the reports
+bench/results/*
+!bench/results/*/
+bench/results/*/*
+!bench/results/*/report.md
+!bench/results/*/results.json
+bench/results-*.log

@@ -26,6 +26,22 @@ END = "<!-- kvleak:end -->"
 HEADING = "## Context hygiene (measured by kvleak on this machine)"
 
 
+RULE_TEXT = {
+    "shell-output": "Shell output: when a command can print more than ~100 lines (tests, builds, logs, listings), redirect "
+                    "it to a file and read the part you need with `tail -n 60`, `grep` or `sed -n`; never let it come back whole.",
+    "scripts-in-files": "Scripts: write any multi-line script or heredoc to a file in the scratchpad once and run the file; "
+                        "iterate with Edit on that file. Every inline script is re-sent on every later call.",
+    "loops-in-subagents": "Long loops: when a task will take more than ~20 tool calls (test-fix cycles, bulk edits, data runs), "
+                          "run it in a subagent that reports back a few lines; do not run it in the main conversation.",
+    "batch-steps": "Mechanical steps: combine sequences of `ls`, `cat`, `grep`, `find` and small reads into one command "
+                   "or one script. Each separate call re-reads the whole context; one script reads it once.",
+    "edit-not-write": "Files: change existing files with Edit, not by rewriting them with Write; generate large or "
+                      "repetitive files with a script instead of writing them out literally.",
+    "terse-in-loops": "Narration: inside tool loops keep status to one line and put reports in files; everything you say "
+                      "is re-read on every later call.",
+}
+
+
 @dataclass
 class Rule:
     id: str
@@ -75,51 +91,39 @@ def propose(agg: Aggregate, bash_cap_saving: float, min_usd: float = 5.0) -> Lis
     if bash and bash_cap_saving >= min_usd:
         big = sum(1 for _, b in agg.bash_blocks if b.est > 2_000)
         rules.append(Rule(
-            "shell-output",
-            "Shell output: when a command can print more than ~100 lines (tests, builds, logs, listings), redirect "
-            "it to a file and read the part you need with `tail -n 60`, `grep` or `sed -n`; never let it come back whole.",
+            "shell-output", RULE_TEXT["shell-output"],
             "{} Bash results over 8k chars; carrying the part beyond 8k cost {}".format(big, _usd(bash_cap_saving)),
             bash_cap_saving, "bash_result_tokens_per_result"))
     bash_in = agg.kinds.get("Bash inputs")
     if bash_in and bash_in["tokens"] / total >= 0.12 and bash_in["carry_usd"] * 0.5 >= min_usd:
         rules.append(Rule(
-            "scripts-in-files",
-            "Scripts: write any multi-line script or heredoc to a file in the scratchpad once and run the file; "
-            "iterate with Edit on that file. Every inline script is re-sent on every later call.",
+            "scripts-in-files", RULE_TEXT["scripts-in-files"],
             "scripts sent inline to Bash were {:.0%} of the context, carried for {}".format(
                 bash_in["tokens"] / total, _usd(bash_in["carry_usd"])),
             bash_in["carry_usd"] * 0.5, "bash_input_share"))
     if agg.subagent_saving_usd >= min_usd:
         rules.append(Rule(
-            "loops-in-subagents",
-            "Long loops: when a task will take more than ~20 tool calls (test-fix cycles, bulk edits, data runs), "
-            "run it in a subagent that reports back a few lines; do not run it in the main conversation.",
+            "loops-in-subagents", RULE_TEXT["loops-in-subagents"],
             "{} loops of 20+ calls re-read {} calls of history for {}; in subagents that would have been {} less".format(
                 agg.long_turns, f"{agg.long_turn_calls:,}", _usd(agg.history_usd), _usd(agg.subagent_saving_usd)),
             agg.subagent_saving_usd, "long_turn_call_share"))
     if agg.chain_saving_usd >= min_usd:
         rules.append(Rule(
-            "batch-steps",
-            "Mechanical steps: combine sequences of `ls`, `cat`, `grep`, `find` and small reads into one command "
-            "or one script. Each separate call re-reads the whole context; one script reads it once.",
+            "batch-steps", RULE_TEXT["batch-steps"],
             "{} chains of 3+ mechanical calls ({} calls); as single scripts they would have saved up to {}".format(
                 agg.chains, f"{agg.chain_calls:,}", _usd(agg.chain_saving_usd)),
             agg.chain_saving_usd, "chain_call_share"))
     write_in = agg.kinds.get("Write inputs")
     if write_in and write_in["tokens"] / total >= 0.04 and write_in["carry_usd"] * 0.5 >= min_usd:
         rules.append(Rule(
-            "edit-not-write",
-            "Files: change existing files with Edit, not by rewriting them with Write; generate large or "
-            "repetitive files with a script instead of writing them out literally.",
+            "edit-not-write", RULE_TEXT["edit-not-write"],
             "Written files were {:.0%} of the context (largest {:,} tokens), carried for {}".format(
                 write_in["tokens"] / total, int(write_in["max"]), _usd(write_in["carry_usd"])),
             write_in["carry_usd"] * 0.5, "write_input_share"))
     text = agg.kinds.get(TEXT_KIND)
     if text and text["tokens"] / total >= 0.08 and text["carry_usd"] * 0.5 >= min_usd:
         rules.append(Rule(
-            "terse-in-loops",
-            "Narration: inside tool loops keep status to one line and put reports in files; everything you say "
-            "is re-read on every later call.",
+            "terse-in-loops", RULE_TEXT["terse-in-loops"],
             "reply text was {:.0%} of the context, carried for {}".format(text["tokens"] / total, _usd(text["carry_usd"])),
             text["carry_usd"] * 0.5, "text_share"))
     return sorted(rules, key=lambda r: -r.saving_usd)

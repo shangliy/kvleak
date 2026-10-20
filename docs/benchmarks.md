@@ -222,3 +222,48 @@ are the baseline.
 The `PostToolUse` hook would have acted on the same 270 results as the
 `bashOutputMaxChars 8000` row of `kvleak tune` ($32), with the difference that
 the model keeps the error lines and a path instead of a cut-off.
+
+## 8. A/B benchmark: accuracy and cost with and without kvleak
+
+`python bench/run.py` (method in [bench/README.md](../bench/README.md)): six
+generated, self-grading tasks, three seeds each, four arms, 72 `claude -p`
+runs on Claude Opus 5.5 (default effort, 80-turn and $4 caps, none hit).
+`baseline` is stock Claude Code; `hooks` adds `kvleak hooks --install`'s four
+hooks via `--settings`; `rules` adds the five `kvleak refine` rules to the
+repo's `CLAUDE.md`; `kvleak` is both. Cost is Claude Code's own
+`total_cost_usd` estimate at list prices.
+
+| arm | accuracy (18 runs) | cost / run | calls / run | context carried / run | Bash result tokens / run | cheaper than baseline |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | **1.00** | $0.21 | 5.0 | 135k | 5,464 | – |
+| hooks | **1.00** | $0.21 (+3%) | 5.3 | 145k | 5,642 | 6 of 18 pairs |
+| rules | **1.00** | $0.20 (−5%) | 4.5 | 120k | 3,772 | 10 of 18 pairs |
+| kvleak | **1.00** | $0.20 (−2%) | 4.9 | 131k | 4,003 | 8 of 18 pairs |
+
+Per task, `baseline → kvleak` (three seeds each): build-error $0.21 → $0.18
+(−16%, 17k-line build log; Bash result tokens 8.7k → 3.5k), log-hunt $0.25 →
+$0.21 (−17%, 130k-line log), the other four tasks −7% to +19%.
+
+What this says, and what it does not:
+
+* **Accuracy is untouched.** 72 runs, every one of them scored 1.0, in every
+  arm. Condensing shell output and adding the rules block did not make the
+  model miss anything these tasks check (including an error buried in the
+  middle of a 17k-line build log).
+* **On short tasks the cost effect is inside the noise.** Every task took
+  4–7 calls and 20–30 seconds. Opus 5.5 already pipes long output through
+  `tail`/`head` on its own: the Bash hook fired in only **3 of 18** runs per
+  hooks arm (the build logs). The `rules` arm is the best of the four (−5%
+  mean, −1.7% median, half a call less per run), but with three seeds a −5%
+  mean is not a result to quote; the per-pair spread is ±20%.
+* **The levers kvleak measures on real history are not reachable here.**
+  Compaction windows, idle compaction, long loops in subagents and the TTL
+  choices all act on sessions of hundreds of calls and hours of wall time;
+  the 30-day numbers in §4–§7 come from those. A 5-call task has nothing to
+  compact and no loop to move. The honest reading is: the hooks and rules are
+  safe (no accuracy cost, no run slowed down), they pay in proportion to how
+  much long output a task produces, and the big savings need the long-session
+  settings from `kvleak tune`.
+
+Spend for the whole benchmark: $14.78 at list price (subscription quota in
+practice). Raw per-run metrics: `bench/results/round2/results.json`.

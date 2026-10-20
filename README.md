@@ -68,6 +68,7 @@ No API key, no config, no network calls, no dependencies. It reads
 | Long tool loops (≥20 calls) replayed as subagents | 114 loops re-read their starting history 4,707 times for $351; in fresh subagents **−$319** |
 | Mechanical chains (3+ consecutive `ls`/`cat`/`grep`/read steps with no decision between them) | **493 chains, 2,235 of 9,924 calls**; as single scripts, up to **−$160** |
 | `kvleak refine` on the same history | 5 rules for CLAUDE.md, each with its evidence; together they cover **≈$640 / 30 d** of measured waste |
+| A/B benchmark, 72 `claude -p` runs on Opus 5.5 (`bench/`) | **accuracy 1.00 in every arm**; cost −16% to −17% on the two tasks with 17k- and 130k-line output, within noise (±5%) on the four short ones. The big savings need long sessions. |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -303,6 +304,12 @@ chains, share of calls in 20+ call loops, ...), and says which rules moved
 their number and which did not. That is Harness²'s probe step run on your
 real sessions instead of a benchmark; it shows whether behaviour changed, not
 that the rule caused it.
+
+**Does any of this cost accuracy?** `bench/` runs generated, self-grading
+tasks through `claude -p` with and without the hooks and rules. In 72 runs on
+Opus 5.5, every arm scored 1.0 on every task; the hooks and rules cut cost by
+16–17% on the two tasks with very long shell output and made no measurable
+difference on short ones. Details in [docs/benchmarks.md §8](docs/benchmarks.md#8-ab-benchmark-accuracy-and-cost-with-and-without-kvleak).
 
 ## Should I keep this cache alive?
 

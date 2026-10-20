@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `bench/`: a before/after benchmark. Six generated, self-grading tasks (verbose test suites, a 130k-line incident
+  log, a 17k-line build log, cross-file renames, data bugs, a deprecation walk) run through `claude -p` in four
+  arms: baseline, hooks, rules, both. First result (Opus 5.5, 3 seeds, 72 runs): accuracy 1.00 in every arm, cost
+  −16% to −17% on the two long-output tasks, within noise elsewhere. `python bench/run.py --selftest` checks the
+  graders without a model.
+- `refine.RULE_TEXT` holds the rule wording so the benchmark and `propose()` share it.
+
 ## 0.6.0 (2026-10-20)
 
 Three things borrowed from REPL-style harnesses (Prime Agent's "context as a variable" and retrievable history,
