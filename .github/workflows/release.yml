@@ -4,6 +4,8 @@ on:
     tags: ["v*"]
 jobs:
   pypi:
+    # Enable once PyPI trusted publishing is configured: set repo variable PYPI_TRUSTED=true
+    if: vars.PYPI_TRUSTED == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -15,3 +17,5 @@ jobs:
           python-version: "3.12"
       - run: pip install build && python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
