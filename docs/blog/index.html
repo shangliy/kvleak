@@ -1,0 +1,530 @@
+<title>The 99% Cache Lie</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="A 99% prompt-cache hit rate and the session still leaked $82. What 30 days of real Claude Code transcripts say about where the money goes, and what to do about it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~66ch) with full-bleed "instrument" bands for the hero, charts and calculator. */
+:root {
+  --bg: #f2f4f7;
+  --panel: #ffffff;
+  --ink: #0e1b30;
+  --muted: #586579;
+  --line: #d6dce5;
+  --amber: #b86200;
+  --amber-soft: #f6e3c8;
+  --leak: #c9372a;
+  --good: #1d7f55;
+  --band: #e6eaf0;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a1220; --panel: #101a2b; --ink: #e6ecf5; --muted: #8f9cb1; --line: #22304a;
+    --amber: #ffb24a; --amber-soft: #3a2a12; --leak: #ff6a55; --good: #4cc38a; --band: #0d1727;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a1220; --panel: #101a2b; --ink: #e6ecf5; --muted: #8f9cb1; --line: #22304a;
+  --amber: #ffb24a; --amber-soft: #3a2a12; --leak: #ff6a55; --good: #4cc38a; --band: #0d1727;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 1.1rem/1.68 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+.wrap {
+  max-width: 1120px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.col { max-width: 40rem; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.08; text-wrap: balance; margin: 0; }
+h2 { font-size: clamp(1.7rem, 3.4vw, 2.4rem); font-weight: 800; letter-spacing: -0.02em; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; }
+a { color: var(--amber); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.eyebrow {
+  font: 500 0.74rem/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--amber);
+}
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- hero ---------- */
+header.hero { padding-block: clamp(40px, 7vw, 88px) clamp(32px, 5vw, 56px); }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(24px, 5vw, 64px); align-items: center; }
+.hero h1 { font-size: clamp(2.6rem, 7vw, 5.4rem); font-weight: 800; letter-spacing: -0.035em; }
+.hero h1 em { font-style: normal; color: var(--leak); }
+.hero .dek { margin-top: 22px; font-size: clamp(1.1rem, 1.6vw, 1.3rem); color: var(--muted); max-width: 34rem; }
+.byline { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px 18px; font: 400 0.82rem/1.4 var(--mono); color: var(--muted); }
+
+.meter {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+  padding: 26px 24px 22px; display: grid; gap: 18px; justify-items: center;
+}
+.meter svg { width: min(260px, 100%); height: auto; display: block; }
+.ring-track { fill: none; stroke: var(--band); stroke-width: 14; }
+.ring-fill { fill: none; stroke: var(--good); stroke-width: 14; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke 0.3s; }
+.ring-clock { font: 600 34px var(--mono); fill: var(--ink); }
+.ring-sub { font: 400 11px var(--mono); fill: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; }
+.statusline {
+  width: 100%; font: 400 0.8rem/1.5 var(--mono); background: var(--band); border-radius: 10px;
+  padding: 10px 12px; color: var(--muted); min-height: 3.1em; overflow-wrap: anywhere;
+}
+.statusline b { color: var(--ink); font-weight: 500; }
+.statusline .bad { color: var(--leak); }
+.statusline .ok { color: var(--good); }
+.meter-cap { font: 400 0.72rem/1.45 var(--mono); color: var(--muted); text-align: center; }
+
+/* ---------- article ---------- */
+article { padding-block: 8px 40px; }
+section { padding-block: clamp(36px, 6vw, 72px); }
+section + section { border-top: 1px solid var(--line); }
+.col > * + * { margin-top: 1.1em; }
+.col h2 + p { margin-top: 0.9em; }
+.lede::first-letter { font-family: var(--display); font-weight: 800; float: left; font-size: 3.6em; line-height: 0.82; padding: 0.06em 0.1em 0 0; color: var(--amber); }
+blockquote.pull {
+  margin: 1.6em 0; padding: 0; font: 600 clamp(1.35rem, 2.6vw, 1.75rem)/1.25 var(--display); letter-spacing: -0.01em;
+}
+blockquote.pull span { background: linear-gradient(transparent 62%, var(--amber-soft) 62%); }
+.formula {
+  font: 500 0.95rem/1.6 var(--mono); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--amber);
+  border-radius: 6px; padding: 14px 16px; overflow-x: auto; white-space: pre;
+}
+
+/* stat strip */
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2em; }
+.stat { background: var(--panel); padding: 18px 18px 16px; display: grid; gap: 6px; align-content: start; }
+.stat b { font: 800 clamp(1.6rem, 3vw, 2.2rem)/1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat span { font: 400 0.78rem/1.4 var(--mono); color: var(--muted); }
+.stat.bad b { color: var(--leak); }
+.stat.good b { color: var(--good); }
+
+/* figures */
+figure { margin: 2.2em 0 0; }
+.fig { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 20px 16px; overflow-x: auto; }
+figcaption { margin-top: 10px; font: 400 0.78rem/1.5 var(--mono); color: var(--muted); }
+.fig svg { display: block; width: 100%; height: auto; min-width: 520px; }
+.fig svg text { font-family: var(--mono); font-size: 12px; fill: var(--muted); }
+.fig svg .lbl { fill: var(--ink); font-size: 13px; }
+.fig svg .big { fill: var(--ink); font-size: 13px; font-weight: 500; }
+.fig svg .grid { stroke: var(--line); stroke-width: 1; }
+.f-hit { fill: var(--good); } .f-miss { fill: var(--leak); } .f-amber { fill: var(--amber); } .f-band { fill: var(--band); } .f-muted { fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font: 400 0.76rem/1.4 var(--mono); color: var(--muted); margin-bottom: 12px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+table.data { width: 100%; border-collapse: collapse; font: 400 0.86rem/1.4 var(--mono); font-variant-numeric: tabular-nums; }
+table.data th, table.data td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: right; }
+table.data th { color: var(--muted); font-weight: 400; }
+table.data th:first-child, table.data td:first-child { text-align: left; }
+table.data tr.hl td { color: var(--ink); font-weight: 500; background: var(--amber-soft); }
+
+/* calculator band */
+.band { background: var(--band); border-block: 1px solid var(--line); }
+.calc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: clamp(20px, 4vw, 48px); align-items: start; }
+.controls { display: grid; gap: 18px; }
+.ctl { display: grid; gap: 8px; }
+.ctl label { font: 500 0.76rem/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ctl output { font: 800 2rem/1 var(--display); font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--amber); }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button {
+  font: 500 0.82rem/1 var(--mono); padding: 9px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ro { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 6px; }
+.ro span { font: 400 0.76rem/1.35 var(--mono); color: var(--muted); }
+.ro b { font: 800 1.7rem/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.ro.bad b { color: var(--leak); } .ro.good b { color: var(--good); } .ro.amber b { color: var(--amber); }
+.ro.wide { grid-column: 1 / -1; }
+.verdict { font: 600 1.05rem/1.4 var(--display); }
+
+/* steps */
+.steps { list-style: none; padding: 0; margin: 1.4em 0 0; display: grid; gap: 14px; }
+.steps li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.steps li::before { counter-increment: s; content: counter(s); font: 800 1.25rem/1 var(--display); color: var(--amber); }
+.steps { counter-reset: s; }
+
+/* install */
+.install { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); margin-top: 1.4em; }
+.install code { flex: 1; min-width: 0; padding: 16px 18px; font-size: 1.05rem; overflow-x: auto; white-space: nowrap; }
+.install button { border: 0; border-left: 1px solid var(--line); background: var(--ink); color: var(--bg); font: 500 0.82rem var(--mono); padding: 0 18px; cursor: pointer; }
+pre.term {
+  margin: 1.2em 0 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+  font: 400 0.8rem/1.6 var(--mono); overflow-x: auto; color: var(--ink);
+}
+pre.term .c { color: var(--muted); }
+pre.term .r { color: var(--leak); } pre.term .g { color: var(--good); } pre.term .a { color: var(--amber); }
+
+.note { font-size: 0.95rem; color: var(--muted); border-left: 2px solid var(--line); padding-left: 14px; }
+footer { padding-block: 40px 64px; font: 400 0.82rem/1.6 var(--mono); color: var(--muted); border-top: 1px solid var(--line); }
+footer .row { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+
+@media (max-width: 820px) {
+  .hero-grid, .calc { grid-template-columns: minmax(0, 1fr); }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .readout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ring-fill { transition: none; }
+}
+</style>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Prompt caching · field report</p>
+      <h1 style="margin-top:18px">Your cache hit rate is <em>99%</em>. You're still leaking money.</h1>
+      <p class="dek">I audited 30 days of my own Claude Code transcripts. One session hit the cache 99.0% of the time and still burned $82 on rebuilds. Here's where the money goes, and the small tool I built to stop it.</p>
+      <div class="byline"><span>kvleak 0.2 · MIT</span><span>Oct 2026</span><span>12 min read</span></div>
+    </div>
+    <div class="meter" aria-label="Animated cache TTL countdown">
+      <svg viewBox="0 0 220 220" role="img" aria-labelledby="ringTitle">
+        <title id="ringTitle">Cache time-to-live draining</title>
+        <circle class="ring-track" cx="110" cy="110" r="88"></circle>
+        <circle class="ring-fill" id="ringFill" cx="110" cy="110" r="88" stroke-dasharray="552.9" stroke-dashoffset="138"></circle>
+        <text class="ring-clock" id="ringClock" x="110" y="116" text-anchor="middle">44:12</text>
+        <text class="ring-sub" x="110" y="142" text-anchor="middle">cache ttl</text>
+      </svg>
+      <div class="statusline" id="statusline"><b>◕ cache 44:12</b> · 452k ctx · rebuild $9.04 · <span class="bad">⚠ /compact saves ~$84</span></div>
+      <p class="meter-cap">A 452k-token Fable 5.1 session. Let the ring run out and the next message costs $8.92 extra. One message before it does costs $0.11.</p>
+    </div>
+  </div>
+</header>
+
+<article>
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="lede">Prompt caching is the best deal in AI right now. Send the same long prefix twice and the second time you pay a tenth of the price, or a fortieth on the newest models. Every agent harness does it, and every dashboard shows a reassuring number: <strong>cache hit rate, 92%</strong>.</p>
+      <p>That number counts tokens. Your bill counts something else. A cache hit is cheap, but a miss rebuilds the <em>whole</em> context at the write price, and in a long agent session the context is hundreds of thousands of tokens. A handful of misses can outweigh thousands of hits.</p>
+      <p>So I wrote a small auditor, <a href="https://github.com/shangliy/kvleak">kvleak</a>, pointed it at the transcripts Claude Code already keeps on disk, and looked at what a month of my own work actually cost.</p>
+      <div class="stats" role="list">
+        <div class="stat" role="listitem"><b class="num">97.5%</b><span>cache hit rate, interactive sessions</span></div>
+        <div class="stat bad" role="listitem"><b class="num">27.5%</b><span>of input spend went to rebuilds</span></div>
+        <div class="stat" role="listitem"><b class="num">2.2%</b><span>of calls carried 54% of uncached input</span></div>
+        <div class="stat good" role="listitem"><b class="num">−63%</b><span>input spend with 10 well-timed compactions</span></div>
+      </div>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="eyebrow">1 · The asymmetry</p>
+      <h2>A miss costs 12 to 80 hits</h2>
+      <p>Caching is priced on two sides. Reading a cached prefix costs about 0.1× the input price (0.05× on Opus 5.5, 0.025× on Fable 5.1). Writing it costs 1.25× with a 5-minute lifetime, or 2× with a 1-hour lifetime. Every read also resets the timer for free.</p>
+      <p>Cheaper reads make each miss hurt <em>more</em> by comparison. Here is one rebuild of a 200k-token context against one read of it, with a 1-hour cache:</p>
+      <figure>
+        <div class="fig">
+          <div class="legend"><span><i class="f-hit" style="background:var(--good)"></i>one cache hit</span><span><i style="background:var(--leak)"></i>avoidable cost of one miss</span></div>
+          <svg viewBox="0 0 640 230" role="img" aria-label="Bar chart: cost of one cache miss versus one hit on a 200k context, by model">
+            <!-- scale: $0 → x=170, $4.00 → x=610 (110 px per dollar) -->
+            <line class="grid" x1="170" y1="12" x2="170" y2="200"></line>
+            <line class="grid" x1="280" y1="12" x2="280" y2="200"></line>
+            <line class="grid" x1="390" y1="12" x2="390" y2="200"></line>
+            <line class="grid" x1="500" y1="12" x2="500" y2="200"></line>
+            <line class="grid" x1="610" y1="12" x2="610" y2="200"></line>
+            <text x="170" y="220" text-anchor="middle">$0</text><text x="280" y="220" text-anchor="middle">$1</text><text x="390" y="220" text-anchor="middle">$2</text><text x="500" y="220" text-anchor="middle">$3</text><text x="610" y="220" text-anchor="middle">$4</text>
+
+            <text class="lbl" x="0" y="34">Fable 5.1</text>
+            <rect class="f-miss" x="170" y="20" width="434.5" height="16" rx="2"></rect>
+            <rect class="f-hit" x="170" y="39" width="5.5" height="8" rx="1"></rect>
+            <text class="big" x="598" y="32" text-anchor="end" style="fill:#fff">$3.95 · 80×</text>
+
+            <text class="lbl" x="0" y="82">Opus 5.5</text>
+            <rect class="f-miss" x="170" y="68" width="171.6" height="16" rx="2"></rect>
+            <rect class="f-hit" x="170" y="87" width="4.4" height="8" rx="1"></rect>
+            <text class="big" x="350" y="81">$1.56 · 40×</text>
+
+            <text class="lbl" x="0" y="130">Sonnet 5.5</text>
+            <rect class="f-miss" x="170" y="116" width="83.6" height="16" rx="2"></rect>
+            <rect class="f-hit" x="170" y="135" width="4.4" height="8" rx="1"></rect>
+            <text class="big" x="262" y="129">$0.76 · 20×</text>
+
+            <text class="lbl" x="0" y="178">Haiku 5.5</text>
+            <rect class="f-miss" x="170" y="164" width="4.4" height="16" rx="2"></rect>
+            <rect class="f-hit" x="170" y="183" width="1" height="8" rx="1"></rect>
+            <text class="big" x="182" y="177">$0.04 · 20×</text>
+          </svg>
+        </div>
+        <figcaption>Avoidable cost = 200k × (write − read) at list price; 1-hour TTL. Source: <code>kvleak models</code>, <code>kvleak breakeven</code>.</figcaption>
+      </figure>
+      <blockquote class="pull"><span>Hit rate is a vanity metric. Leaked dollars are the real one.</span></blockquote>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="eyebrow">2 · Where it went</p>
+      <h2>Mostly, I walked away</h2>
+      <p>kvleak finds every expensive miss and labels why it happened. Over 30 days of interactive sessions, $418 leaked. This is where it went:</p>
+      <figure>
+        <div class="fig">
+          <svg viewBox="0 0 640 150" role="img" aria-label="Stacked bar of leak by cause">
+            <!-- 600 px = 100% of $418 leak -->
+            <rect class="f-miss" x="20" y="20" width="494.4" height="36"></rect>
+            <rect style="fill:var(--amber)" x="514.4" y="20" width="39" height="36"></rect>
+            <rect style="fill:#8e4ec6" x="553.4" y="20" width="28.8" height="36"></rect>
+            <rect style="fill:#3e63dd" x="582.2" y="20" width="28.2" height="36"></rect>
+            <rect class="f-muted" x="610.4" y="20" width="9.6" height="36"></rect>
+            <text x="30" y="43" style="fill:#fff;font-weight:500">idle gap outlived the TTL · 82.4%</text>
+            <line class="grid" x1="533.9" y1="58" x2="533.9" y2="80"></line><text x="533.9" y="94" text-anchor="middle">subagent cold start 6.5%</text>
+            <line class="grid" x1="567.8" y1="58" x2="567.8" y2="104"></line><text x="567.8" y="118" text-anchor="middle">prefix changed 4.8%</text>
+            <line class="grid" x1="596.3" y1="58" x2="596.3" y2="128"></line><text x="600" y="142" text-anchor="end">model switch 4.7% · compaction + cold 1.6%</text>
+          </svg>
+        </div>
+        <figcaption>30 days, 289 interactive transcripts (257 of them subagents), 13,110 calls. Leak = rebuilt context × (write − read).</figcaption>
+      </figure>
+      <p>The surprise was the <em>length</em> of the gaps. Claude Code now writes about 90% of its cache with the 1-hour lifetime, so the 5-minute expiry everyone worries about barely matters. The expensive misses were lunch, meetings, and overnight: the median gap before an expiry was <strong>2.8 hours</strong>.</p>
+      <p>One example: a Fable 5.1 session carrying 452k tokens sat idle for 1 hour 24 minutes. The next message rebuilt it for <strong class="num">$8.92</strong>. One message at minute 59 would have reset the timer for <strong class="num">$0.11</strong>.</p>
+      <div class="formula">max worthwhile pings  K = floor((write − read) / read)
+  11 at 0.10× reads · 24 at 0.05× · 49 at 0.025×</div>
+      <p>That's what the ring at the top of this page is. <code>kvleak statusline --install</code> puts it in Claude Code's status bar, so you can see the cache dying and decide whether to save it.</p>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="eyebrow">3 · The bigger surprise</p>
+      <h2>A big context costs you on every call, even when it hits</h2>
+      <p>Then I looked at the hits. A cache read is cheap per token, but a 450k-token context is a lot of tokens. Carrying it costs a read on every call, plus a small chance that the call misses and rebuilds everything. On Opus 5.5 that adds up to about <strong>$0.17 per call</strong>, before the model writes a single word.</p>
+      <p>Compacting, or handing off to a fresh session with a short doc, costs money once and makes every later call cheaper. The break-even is simple enough to compute live:</p>
+      <div class="formula">R* = one-time cost
+     / ((C − S) × (read + miss_rate × (write − read)))</div>
+      <p>For a 450k context on Opus 5.5, compacting costs about $0.31 and pays for itself after <strong>2 calls</strong>. <code>kvleak advise</code> does this math for your current session. It estimates how many calls you have left from how long your own sessions usually run.</p>
+      <p>To check it honestly, I replayed my history with the advisor in the loop. At each call it could only see the past. When it fired, every later call was re-priced with the smaller context, at what that call actually paid:</p>
+      <figure>
+        <div class="fig">
+          <table class="data">
+            <thead><tr><th>compact only above</th><th>compactions in 30 days</th><th>input spend</th><th>saved</th></tr></thead>
+            <tbody>
+              <tr><td>100k tokens</td><td>119</td><td>$1,272</td><td>$1,008 · 80.6%</td></tr>
+              <tr><td>200k tokens</td><td>39</td><td>$1,272</td><td>$933 · 74.9%</td></tr>
+              <tr class="hl"><td>400k tokens</td><td>10</td><td>$1,272</td><td>$778 · 63.2%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figcaption>Source: <code>kvleak advise --backtest</code> on 33 main sessions. Money only: it assumes the summary keeps what the rest of the session needs.</figcaption>
+      </figure>
+      <p class="note">This counts money only. A summary can drop a detail you needed later, and that cost doesn't show up here. Compact at natural breaks: after a feature lands, before switching tasks. Even the cautious row, ten compactions in a month, cuts the bill by almost two thirds.</p>
+    </div></div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="col" style="margin-bottom:28px">
+        <p class="eyebrow">Try the numbers</p>
+        <h2 style="margin-top:12px">What does your context cost?</h2>
+      </div>
+      <div class="calc">
+        <div class="controls">
+          <div class="ctl">
+            <label for="ctx">Context size</label>
+            <output id="ctxOut" for="ctx">450k</output>
+            <input id="ctx" type="range" min="50" max="1000" step="10" value="450" aria-describedby="ctxOut">
+          </div>
+          <div class="ctl">
+            <label id="modelLbl">Model</label>
+            <div class="seg" role="group" aria-labelledby="modelLbl" id="models"></div>
+          </div>
+          <div class="ctl">
+            <label id="ttlLbl">Cache lifetime</label>
+            <div class="seg" role="group" aria-labelledby="ttlLbl" id="ttls"></div>
+          </div>
+        </div>
+        <div class="readout" aria-live="polite">
+          <div class="ro good"><span>one cache hit</span><b id="rHit">$0.090</b></div>
+          <div class="ro bad"><span>one miss, avoidable part</span><b id="rMiss">$3.51</b></div>
+          <div class="ro amber"><span>carrying it, per call</span><b id="rCarry">$0.17</b></div>
+          <div class="ro"><span>compaction pays off after</span><b id="rBE">2.0 calls</b></div>
+          <div class="ro wide"><span>verdict</span><p class="verdict" id="rVerdict">Compact at the next natural break.</p></div>
+        </div>
+      </div>
+      <p class="col meter-cap" style="margin-top:20px;text-align:left">Assumes a 2.2% per-call miss rate (measured), an 8k-token summary, 25k of cached system prompt, and output priced at 5× input. Same formulas as <code>kvleak advise</code>.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="eyebrow">4 · Many agents, many models</p>
+      <h2>Swarms multiply every leak</h2>
+      <p>Everything above gets worse with several agents. Three effects stack:</p>
+      <ul class="steps">
+        <li><span><strong>Caches don't cross models.</strong> KV state belongs to the weights that made it. Hand a 130k context from one model to another and it's a full-price rebuild, every time.</span></li>
+        <li><span><strong>Shared boards cost O(N²).</strong> Paste one 500-line build log on a board six agents read, and all six carry it on every later turn.</span></li>
+        <li><span><strong>One-shot subagents pay a cold-start tax.</strong> My subagents averaged 28k tokens of full-price prefill before doing anything.</span></li>
+      </ul>
+      <figure>
+        <div class="fig">
+          <svg viewBox="0 0 640 210" role="img" aria-label="Simulated swarm cost under four practices">
+            <!-- $0 → x=250, $71.10 → x=610 (5.063 px per dollar) -->
+            <text class="lbl" x="0" y="34">naive</text><text x="0" y="50">paste logs, respawn, switch</text>
+            <rect class="f-miss" x="250" y="22" width="360" height="22" rx="2"></rect><text x="604" y="38" text-anchor="end" style="fill:#fff">$71.10</text>
+            <text class="lbl" x="0" y="84">+ pointers on the board</text>
+            <rect class="f-amber" x="250" y="72" width="138.6" height="22" rx="2"></rect><text class="big" x="396" y="88">$27.37 · −62%</text>
+            <text class="lbl" x="0" y="134">+ warm workers</text>
+            <rect class="f-amber" x="250" y="122" width="117.4" height="22" rx="2"></rect><text class="big" x="375" y="138">$23.18 · −67%</text>
+            <text class="lbl" x="0" y="184">+ one model per worker</text>
+            <rect class="f-hit" x="250" y="172" width="48.8" height="22" rx="2"></rect><text class="big" x="306" y="188">$9.63 · −86%</text>
+          </svg>
+        </div>
+        <figcaption>Simulation, not measurement: 6 workers × 40 rounds, Opus 5.5 prices. Run <code>python examples/swarm_sim.py</code> and change the constants.</figcaption>
+      </figure>
+      <p>The fix for the board is boring and huge: write the log to disk and post a pointer. <code>kvleak pointer build.log --status FAIL</code> prints about 60 tokens of JSON (path, hash, line count, last lines), and only the agent fixing the build opens the file. The <a href="https://github.com/shangliy/kvleak/blob/main/docs/playbook.md">playbook</a> has the full six-layer version, plus a contract you can paste straight into your swarm's instructions.</p>
+    </div></div>
+  </section>
+
+  <section>
+    <div class="wrap"><div class="col">
+      <p class="eyebrow">5 · Try it on your own logs</p>
+      <h2>Three seconds, no API key</h2>
+      <p>kvleak reads the transcripts already on your disk. It has no dependencies, makes no network calls, and doesn't ask for config. It covers Claude Code out of the box, including subagents, and any JSONL with token usage: OpenAI-style, Gemini-style and most agent frameworks.</p>
+      <div class="install"><code id="cmd">uvx kvleak</code><button type="button" id="copy">Copy</button></div>
+<pre class="term"><span class="c">$ kvleak --since 30d</span>
+  Cache hit rate    97.5%  ████████████████████████
+  Input spend       $1,522   caching already saved you $16,563
+  Leaked to misses    $418  <span class="r">27.5% of input spend went to cache rebuilds</span>
+  Recoverable          $90  <span class="g">with keep-alive pings (idle ≤ 2h)</span>
+
+<span class="c">$ kvleak advise</span>
+  Context now 207k · carrying it costs $0.077 per call
+  <span class="a">→ Write a short hand-off doc and start a fresh session (pays off within 4 calls).</span></pre>
+      <ol class="steps">
+        <li><span><code>kvleak</code> gives the full audit: hit rate, dollars leaked, causes, worst sessions, and what to do about them.</span></li>
+        <li><span><code>kvleak statusline --install</code> adds the live TTL ring and the <code>⚠ /compact</code> hint to Claude Code.</span></li>
+        <li><span><code>kvleak advise</code> tells you whether to compact or hand off right now, and <code>--backtest</code> checks the advice against your own history.</span></li>
+        <li><span><code>kvleak --fail-over 15</code> fails a CI job when more than 15% of its input spend leaked.</span></li>
+      </ol>
+      <p class="note">About these numbers: this is one heavy user's month at list API prices. That's a single data point, which is why the tool exists. Run it and you'll have your own in three seconds.</p>
+    </div></div>
+  </section>
+</article>
+
+<footer>
+  <div class="wrap row">
+    <a href="https://github.com/shangliy/kvleak">github.com/shangliy/kvleak</a>
+    <a href="https://pypi.org/project/kvleak/">pypi.org/project/kvleak</a>
+    <a href="https://github.com/shangliy/kvleak/blob/main/docs/benchmarks.md">methodology</a>
+    <span>MIT licensed</span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // ---------- hero ring: drain, go cold, then a keep-alive saves it ----------
+  const C = 2 * Math.PI * 88;
+  const fill = document.getElementById("ringFill");
+  const clock = document.getElementById("ringClock");
+  const status = document.getElementById("statusline");
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const TTL = 3600;
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const fmt = (s) => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  const glyph = (f) => "○◔◑◕●"[Math.min(4, Math.floor(f * 4) + 1)];
+
+  function draw(left, phase) {
+    const f = Math.max(left, 0) / TTL;
+    fill.setAttribute("stroke-dashoffset", String(C * (1 - f)));
+    fill.style.stroke = left <= 0 ? css("--leak") : f < 0.08 ? css("--leak") : f < 0.25 ? css("--amber") : css("--good");
+    clock.textContent = left <= 0 ? "cold" : fmt(left);
+    if (phase === "cold") {
+      status.innerHTML = '<b class="bad">○ cache cold</b> · next msg rebuilds 452k <span class="bad">($8.92 extra)</span>';
+    } else if (phase === "saved") {
+      status.innerHTML = '<b class="ok">● refreshed</b> · one message kept 452k warm for <span class="ok">$0.11</span>';
+    } else {
+      status.innerHTML = "<b>" + glyph(f) + " cache " + fmt(left) + "</b> · 452k ctx · rebuild $9.04 · " +
+        '<span class="bad">⚠ /compact saves ~$84</span>';
+    }
+  }
+
+  if (reduce) { draw(2652, "live"); return; }
+  // timeline (seconds of animation): 0–7 drain from 44:12 to 0, 7–9.5 cold, 9.5–12 saved, loop
+  const start = 2652;
+  let t0 = null, savedOnce = false;
+  function tick(ts) {
+    if (t0 === null) t0 = ts;
+    const t = ((ts - t0) / 1000) % 12;
+    if (t < 7) {
+      const left = start * (1 - t / 7);
+      draw(savedOnce ? Math.max(left, 0) : left, "live");
+    } else if (t < 9.5) {
+      draw(0, "cold");
+    } else {
+      draw(TTL, "saved");
+      savedOnce = true;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+
+(() => {
+  // ---------- calculator (same math as kvleak advise) ----------
+  const MODELS = [
+    { id: "Fable 5.1", price: 10, read: 0.025 },
+    { id: "Opus 5.5", price: 4, read: 0.05 },
+    { id: "Sonnet 5.5", price: 2, read: 0.1 },
+    { id: "Haiku 5.5", price: 0.1, read: 0.1 },
+  ];
+  const TTLS = [{ id: "1 hour", write: 2 }, { id: "5 minutes", write: 1.25 }];
+  const MISS = 0.022, SUMMARY = 8000, BASE = 25000, OUT = 5;
+  let model = MODELS[1], ttl = TTLS[0];
+  const $ = (id) => document.getElementById(id);
+  const usd = (v) => v >= 100 ? "$" + v.toFixed(0) : v >= 1 ? "$" + v.toFixed(2) : v >= 0.01 ? "$" + v.toFixed(3) : "$" + v.toFixed(4);
+
+  function seg(container, items, current, onPick) {
+    items.forEach((it) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = it.id; b.setAttribute("aria-pressed", String(it === current));
+      b.addEventListener("click", () => {
+        container.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+        b.setAttribute("aria-pressed", "true"); onPick(it); update();
+      });
+      container.appendChild(b);
+    });
+  }
+  seg($("models"), MODELS, model, (m) => (model = m));
+  seg($("ttls"), TTLS, ttl, (t) => (ttl = t));
+
+  function update() {
+    const k = Number($("ctx").value);
+    const C = k * 1000;
+    $("ctxOut").textContent = k >= 1000 ? "1M" : k + "k";
+    const p = model.price / 1e6, r = model.read, w = ttl.write;
+    const rEff = r + MISS * (w - r);
+    const S = BASE + SUMMARY;
+    const oneTime = C * r + SUMMARY * OUT + SUMMARY * w;
+    const be = oneTime / (Math.max(C - S, 1) * rEff);
+    $("rHit").textContent = usd(C * r * p);
+    $("rMiss").textContent = usd(C * (w - r) * p);
+    $("rCarry").textContent = usd(C * rEff * p);
+    $("rBE").textContent = be > 999 ? "never" : be.toFixed(1) + " calls";
+    let v;
+    if (C < 100000) v = "Keep going. Under 100k, compaction isn't worth losing detail.";
+    else if (be <= 5) v = "Compact at the next natural break. It pays for itself in " + Math.ceil(be) + " calls.";
+    else if (be <= 30) v = "Compact if this session has more than " + Math.ceil(be) + " calls left.";
+    else v = "Keep going unless the session will run long.";
+    $("rVerdict").textContent = v + " A miss costs " + Math.round(w / r) + "× a hit here.";
+  }
+  $("ctx").addEventListener("input", update);
+  update();
+
+  $("copy").addEventListener("click", () => {
+    const text = $("cmd").textContent;
+    const done = () => { $("copy").textContent = "Copied"; setTimeout(() => ($("copy").textContent = "Copy"), 1600); };
+    const fallback = () => { const range = document.createRange(); range.selectNodeContents($("cmd")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); };
+    try { navigator.clipboard.writeText(text).then(done, fallback); } catch (e) { fallback(); }
+  });
+})();
+</script>
