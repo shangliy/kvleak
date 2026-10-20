@@ -5,7 +5,7 @@ Thanks for helping! kvleak stays **zero-dependency** and **local-only**; please 
 ## Dev setup
 
 ```bash
-git clone https://github.com/kvleak/kvleak && cd kvleak
+git clone https://github.com/shangliy/kvleak && cd kvleak
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q && ruff check src tests

@@ -2,11 +2,15 @@
 
 **Find out where your AI coding agent leaks prompt-cache money, and how to stop it.**  ·  [中文](README.zh-CN.md)
 
-[![CI](https://github.com/kvleak/kvleak/actions/workflows/ci.yml/badge.svg)](https://github.com/kvleak/kvleak/actions/workflows/ci.yml)
+[![CI](https://github.com/shangliy/kvleak/actions/workflows/ci.yml/badge.svg)](https://github.com/shangliy/kvleak/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/kvleak)](https://pypi.org/project/kvleak/)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
+
+> **A 99.0% cache hit rate, and the session still leaked $82.** On Claude Fable 5.1 one
+> cache miss costs as much as 80 hits. In a 30-day audit of real Claude Code use, 2% of calls
+> carried more than half of all uncached input. [See the numbers →](docs/benchmarks.md)
 
 Your agent probably reports a 90%+ cache hit rate, and you are still overpaying.
 A cache miss costs about **12× more than a hit**, and the misses are rare but huge.
@@ -49,6 +53,19 @@ No API key, no config, no network calls, no dependencies. It reads
 <sub>Output from the bundled synthetic demo: `python examples/make_demo.py demo && kvleak --path demo`</sub>
 
 ---
+
+## Real numbers
+
+| | |
+|---|---|
+| 30 days of interactive Claude Code sessions | **97.5%** hit rate, but **27.5%** of input spend went to cache rebuilds |
+| Share of that leak caused by idle gaps | **82%** (median gap 2.8 h; Claude Code now uses the 1 h TTL) |
+| Cost of one miss on a 200k context | **$3.95** on Fable 5.1, $1.56 on Opus 5.5 (1 h TTL) |
+| 6-worker swarm, pointers + warm workers + pinned models | **−86%** input cost in simulation |
+
+Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
+
+<p align="center"><img src="https://raw.githubusercontent.com/shangliy/kvleak/main/docs/assets/report.png" width="720" alt="kvleak HTML report"></p>
 
 ## What you get
 

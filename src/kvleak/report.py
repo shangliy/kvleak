@@ -62,7 +62,7 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
         out.append(
             "  Recoverable      {}   {}".format(
                 c(_money_or_tokens(r.keepalive_saving, r.keepalive_saving_usd, priced).rjust(8), "bold", "green"),
-                c("with break-even-capped keep-alive pings alone", "grey"),
+                c("with keep-alive pings (idle ≤ 2h, capped at break-even)", "grey"),
             )
         )
     out.append("")

@@ -21,6 +21,9 @@ CAUSES = {
 }
 
 KEEPALIVE_MARGIN_S = 30  # fire the keep-alive this long before expiry
+# Only credit keep-alive for gaps a person would plausibly bridge (a meeting, lunch,
+# a long build). Overnight gaps are break-even-positive on paper but nobody pings all night.
+KEEPALIVE_MAX_IDLE_S = 2 * 3600
 TTL_SLACK_S = 10  # transcript timestamps are written after generation ends
 
 
@@ -200,7 +203,7 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
                 # k pings keep the entry alive until k * interval + ttl after the last call.
                 pings = max(1, math.ceil((gap - ttl) / interval))
                 miss.keepalive_pings = pings
-                if pings <= price.keepalive_kmax(ttl):
+                if pings <= price.keepalive_kmax(ttl) and gap <= KEEPALIVE_MAX_IDLE_S:
                     miss.keepalive_saving = max(penalty - pings * rebuilt * price.read_mult, 0.0)
             misses.append(miss)
         prev = step
