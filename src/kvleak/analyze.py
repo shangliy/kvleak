@@ -74,6 +74,7 @@ class SessionStats:
 class Report:
     sessions: int = 0
     subagents: int = 0
+    oneshot: int = 0  # short non-subagent transcripts, e.g. `claude -p` runs
     steps: int = 0
     input: int = 0
     write_5m: int = 0
@@ -89,6 +90,9 @@ class Report:
     buckets: Dict[str, Dict[str, float]] = field(default_factory=dict)
     keepalive_saving: float = 0.0
     keepalive_saving_usd: float = 0.0
+    dead_write: float = 0.0  # write premium paid on tokens that were never read back
+    dead_write_usd: float = 0.0
+    dead_write_by_workload: Dict[str, float] = field(default_factory=dict)  # usd
     misses: List[Miss] = field(default_factory=list)
     worst_sessions: List[SessionStats] = field(default_factory=list)
     min_miss_tokens: int = 10_000
@@ -216,15 +220,21 @@ def analyze(
     min_miss_tokens: int = 10_000,
     top_sessions: int = 10,
 ) -> Report:
+    from .policy import dead_writes
+
     r = Report(min_miss_tokens=min_miss_tokens)
     r.buckets = {c: {"count": 0, "uncached": 0, "penalty": 0.0, "penalty_usd": 0.0} for c in CAUSES}
     models: Counter = Counter()
     sessions: List[SessionStats] = []
+    transcripts = list(transcripts)
+    dw = dead_writes(transcripts, price_for)
+    r.dead_write, r.dead_write_usd, r.dead_write_by_workload = dw.premium, dw.premium_usd, dict(dw.by_workload)
     for t in transcripts:
         if not t.steps:
             continue
         r.sessions += 1
         r.subagents += int(t.is_subagent)
+        r.oneshot += int(not t.is_subagent and len(t.steps) < 5)
         s = SessionStats(t.session_id, t.project, t.path, t.is_subagent, [])
         seen_models: Dict[str, None] = {}
         for step in t.steps:
@@ -319,6 +329,21 @@ def recommendations(r: Report) -> List[str]:
             tips.append(
                 "New sessions start cold. Resume (`claude --continue`) instead of starting over for the same task, "
                 "and trim always-loaded context (MCP tool schemas, giant CLAUDE.md files)."
+            )
+    dead = r.dead_write_usd if r.priced else r.dead_write
+    total = r.cost_usd if r.priced else r.cost
+    if total and dead / total >= 0.03:
+        wl = max(r.dead_write_by_workload, key=r.dead_write_by_workload.get, default="main")
+        if wl == "headless":
+            tips.append(
+                "One-shot `claude -p` runs pay the 1h cache-write premium on prompts nothing reads back. "
+                "Set CLAUDE_CODE_PROMPT_CACHE_TTL=5m for batch scripts, or move the batch to the Message Batches API."
+            )
+        else:
+            tips.append(
+                "A lot of cached content is written at the write premium and never read again (sessions that end "
+                "right after a big tool result, or idle past the TTL). Finish with a short wrap-up turn only when "
+                "you will continue, and let `kvleak tune` pick the TTL."
             )
     if not tips and r.steps:
         tips.append("No significant leaks found. Your cache discipline is already good.")

@@ -29,14 +29,10 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
     title = "kvleak · prompt-cache leak report"
     out.append("")
     out.append(c(" " + title, "bold"))
-    out.append(
-        c(
-            " {} sessions + {} subagents · {} model calls · {} min miss size".format(
-                r.sessions - r.subagents, r.subagents, f"{r.steps:,}", tok(r.min_miss_tokens)
-            ),
-            "grey",
-        )
-    )
+    who = " {} sessions + {} subagents".format(r.sessions - r.subagents - r.oneshot, r.subagents)
+    if r.oneshot:
+        who += " + {} one-shot runs".format(f"{r.oneshot:,}")
+    out.append(c("{} · {} model calls · {} min miss size".format(who, f"{r.steps:,}", tok(r.min_miss_tokens)), "grey"))
     out.append("")
 
     hr = r.hit_rate
@@ -63,6 +59,15 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
             "  Recoverable      {}   {}".format(
                 c(_money_or_tokens(r.keepalive_saving, r.keepalive_saving_usd, priced).rjust(8), "bold", "green"),
                 c("with keep-alive pings (idle ≤ 2h, capped at break-even)", "grey"),
+            )
+        )
+    if r.dead_write:
+        wl = max(r.dead_write_by_workload, key=r.dead_write_by_workload.get, default="")
+        label = {"headless": "one-shot `claude -p` runs", "subagent": "subagents", "main": "interactive sessions"}.get(wl, "")
+        out.append(
+            "  Dead writes      {}   {}".format(
+                c(_money_or_tokens(r.dead_write, r.dead_write_usd, priced).rjust(8), "bold", "yellow"),
+                c("write premium on tokens never read back" + (" (mostly {})".format(label) if label else ""), "grey"),
             )
         )
     out.append("")
@@ -136,7 +141,7 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
                 "grey",
             )
         )
-    out.append(c("  Drill into one session: kvleak session <id>   ·   Share it: kvleak --html report.html", "grey"))
+    out.append(c("  Tune Claude Code's settings from this data: kvleak tune   ·   One session: kvleak session <id>", "grey"))
     return "\n".join(out)
 
 
@@ -148,12 +153,13 @@ def render_markdown(r: Report) -> str:
         "",
         "| metric | value |",
         "|---|---|",
-        f"| Sessions | {r.sessions - r.subagents} (+{r.subagents} subagents) |",
+        f"| Sessions | {r.sessions - r.subagents - r.oneshot} (+{r.subagents} subagents, {r.oneshot} one-shot runs) |",
         f"| Model calls | {r.steps:,} |",
         f"| Cache hit rate | **{pct(r.hit_rate)}** |",
         f"| Input spend | {m(r.cost, r.cost_usd)} |",
         f"| Leaked to cache misses | **{m(r.leak, r.leak_usd)}** |",
         f"| Recoverable with keep-alive | {m(r.keepalive_saving, r.keepalive_saving_usd)} |",
+        f"| Dead cache writes | {m(r.dead_write, r.dead_write_usd)} |",
         "",
         "| cause | misses | uncached tokens | leak |",
         "|---|---:|---:|---:|",

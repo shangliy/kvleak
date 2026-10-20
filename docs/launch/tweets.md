@@ -73,11 +73,11 @@ Counter-intuitive: a big context costs you on every call, even when it hits.
 **7 · Backtest**
 I replayed 30 days of my sessions with a compaction advisor in the loop. It only saw the past at each step.
 
-Compact only above 400k context:
-→ 10 compactions in a month
-→ −63% input spend
+Auto-compact at 200k instead of the default ~967k:
+→ ~3 compactions per session
+→ −58% input spend
 
-Money only, so compact at natural breaks. `kvleak advise --backtest`
+Claude Code has the setting. `kvleak tune --apply` picks the value from your own history and writes it.
 
 ---
 

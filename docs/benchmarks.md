@@ -93,15 +93,46 @@ is re-priced with the smaller context at what that call really paid per token.
 
 | compact only above | compactions in 30 days | input spend | saved | share |
 |---:|---:|---:|---:|---:|
-| 100k | 119 | $1,272 | $1,008 | 80.6% |
-| 200k | 39 | $1,272 | $933 | 74.9% |
-| **400k** | **10** | $1,272 | **$778** | **63.2%** |
+| 100k | 334 | $1,297 | $832 | 66.7% |
+| **200k** | **98** (≈3 per session) | $1,297 | **$721** | **57.7%** |
+| 400k | 23 | $1,297 | $487 | 40.2% |
 
-Why it's so large: with caching, the bill is dominated by *re-reading* huge
-contexts. A 450k context on Opus 5.5 costs about $0.17 per call just to carry,
-counting cache reads plus a 2% miss risk at the 1-hour write price. Compacting
-it costs about $0.31 once and pays off after **2 calls**.
+The post-compaction size is learned from the 32 real compactions in the same
+history (median 51k tokens, not the 33k a naive model assumes), and a session
+that really compacted is not credited twice. Both corrections make these
+numbers smaller than the ones in the 0.2.0 release notes.
+
+Why it's still so large: with caching, the bill is dominated by *re-reading*
+huge contexts. A 450k context on Opus 5.5 costs about $0.17 per call just to
+carry, counting cache reads plus a 1–2% miss risk at the 1-hour write price.
+Compacting it costs about $0.31 once and pays off after **2 calls**.
 
 > This counts money only. It assumes the summary keeps what the rest of the
 > session needs. In practice, compact at natural breaks: after a feature lands,
 > before switching tasks, or when the statusline shows `⚠ /compact saves ~$X`.
+
+## 5. Backtest: Claude Code's own settings (`kvleak tune`)
+
+Claude Code 2.1.3xx exposes the knobs behind most of the above. `kvleak tune`
+replays the same 30 days under each candidate value (method in
+[how-it-works §7](how-it-works.md#7-settings-backtests-kvleak-tune)):
+
+| setting | default | best for this history | saving / 30 d | note |
+|---|---|---|---:|---|
+| `autoCompactWindow` | auto (~967k on 1M models) | **200k** | **$721 (−57.7%)** | 98 compactions over 33 sessions; the largest window that keeps 80% of the best saving |
+| `promptCacheTtl` (main) | 1h on a subscription, 5m on an API key | 1h | $0 (already 1h) | 5m would have cost **+$1,884**: 739 hits in the 5–60 min band would become misses |
+| `subagentPromptCacheTtl` | 5m | 5m | $0 | 1h would cost +$112; subagents rarely idle |
+| `CLAUDE_CODE_PROMPT_CACHE_TTL` for `claude -p` batches | 1h | **5m** | **$169 (−36%)** | 20,535 one-shot runs; the prompt is written at 2× and never read back |
+| `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | 200k | 100k | $20 | idle compaction itself nets $212 of the $347 idle-gap leak at the default threshold |
+| **total** | | | **$909 (−45% of $2,036)** | |
+
+The full bill for these 30 days, by component, explains why the auto-compact
+window dominates: of $1,850 spent on interactive sessions, **40% was cache
+reads** and **45% cache writes**, against 15% output and under 0.1% uncached
+input. Caching works; what costs money is carrying a median 161k (and up to
+1M) of context on every call.
+
+**Dead writes.** $207 of the 30-day bill was the cache-write premium on tokens
+nothing ever read back: $206 of it in one-shot `claude -p` runs, where every
+prompt is written at the 1h rate (2×) for a single use. That is 42% of what
+those runs cost, hence the 5m TTL recommendation for batch scripts.

@@ -62,7 +62,8 @@ No API key, no config, no network calls, no dependencies. It reads
 | Share of that leak caused by idle gaps | **82%** (median gap 2.8 h; Claude Code now uses the 1 h TTL) |
 | Cost of one miss on a 200k context | **$3.95** on Fable 5.1, $1.56 on Opus 5.5 (1 h TTL) |
 | 6-worker swarm, pointers + warm workers + pinned models | **−86%** input cost in simulation |
-| Compaction advisor replayed on real history (compact only above 400k) | **−63%** input spend with **10** compactions in 30 days |
+| Compaction advisor replayed on real history (compact only above 200k) | **−58%** input spend with 98 compactions in 30 days (≈3 per session); **−40%** with 23 above 400k |
+| `kvleak tune --apply` on the same 30 days | **−$909 (−45%)** from four settings Claude Code already has; auto-compact at 200k instead of ~967k is **−58%** alone |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -77,6 +78,7 @@ Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 | `kvleak session <id>` | Call-by-call timeline of one session, with each miss flagged and explained. |
 | `kvleak statusline --install` | Adds a live **cache TTL countdown** to Claude Code: `◕ cache 3:41 · 182k ctx · rebuild $0.89`. |
 | `kvleak advise` | Tells you whether to **`/compact` or hand off to a fresh session now**, and when that pays for itself. `--backtest` replays your history with the advisor in the loop. |
+| `kvleak tune --apply` | Backtests Claude Code's own cache settings (auto-compact window, cache TTLs, idle compaction) on your history and **writes the winners to `settings.json`**. |
 | `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die. |
 | `kvleak pointer build.log --status FAIL` | Turns a huge file into a ~60-token hand-off message for multi-agent boards. |
 | `kvleak --fail-over 15` | Exits with code 2 when more than 15% of input spend leaked, so it can gate CI or nightly jobs. |
@@ -143,10 +145,41 @@ $ kvleak advise
 The statusline shows the same advice live: `● cache 59:47 · 249k ctx · rebuild $1.99 · ⚠ /compact saves ~$9.42`.
 
 In a backtest on 30 days of real sessions, an advisor that only knew the past
-would have cut input spend by **63%** while compacting just **10 times** (only
-above 400k context). See [docs/benchmarks.md](docs/benchmarks.md#4-backtest-compaction-advisor).
+would have cut input spend by **58%** compacting about 3 times per session
+(only above 200k context), or by **40%** compacting 23 times in total (only
+above 400k). See [docs/benchmarks.md](docs/benchmarks.md#4-backtest-compaction-advisor).
 These numbers cover money only. Compact when the summary would still carry what
 the rest of the session needs.
+
+## Let Claude Code do it: `kvleak tune`
+
+Claude Code can compact for you (`autoCompactWindow`), pick the cache TTL
+(`promptCacheTtl`, `subagentPromptCacheTtl`) and compact idle sessions before
+the cache dies (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`). The defaults are tuned
+for nobody in particular. `kvleak tune` replays **your** last 30 days under each
+value and shows what it would have saved:
+
+```text
+$ kvleak tune
+
+  setting                                         now           best   saving / 30d  why
+  autoCompactWindow                               auto (~967k)  200k        $720.52  98 compactions over 33 sessions instead of 32 · −57.7% of input spend
+  promptCacheTtl                                  1h            1h                –  33 interactive sessions: 1h costs $1,347, 5m costs $3,231
+  subagentPromptCacheTtl                          5m            5m                –  271 subagents: 5m costs $274, 1h costs $386
+  `claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL  1h            5m          $169.11  20535 one-shot runs: 5m costs $301, 1h costs $471 · set it in the batch script
+  CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min · compacting there nets $212 at 200k, $232 at 100k
+  subagent cold starts                            271 × 19.8k   smaller           –  $40.23 on first calls · omitClaudeMd: true, a `tools:` allowlist, or context: fork
+
+  Total if applied: $909.35 per 30d
+  Write these to ~/.claude/settings.json: kvleak tune --apply  (undo: kvleak tune --reset)
+```
+
+`--apply` backs up `settings.json` first; `--reset` removes exactly the keys it
+wrote. `--min-window 300k` keeps auto-compaction from firing below 300k if you
+would rather keep more detail. The audit also reports **dead writes**: tokens
+written at the 1h cache-write premium (2×) that nothing ever read back. For
+one-shot `claude -p` batches that is about 42% of their bill, which is why the
+5m TTL wins there.
 
 ## Should I keep this cache alive?
 

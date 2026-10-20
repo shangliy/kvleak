@@ -88,6 +88,24 @@ shrunk by the tokens dropped, priced at what that call actually paid per token,
 whether it was a hit or a miss. This counts money only. It cannot see quality
 lost in the summary, or rework caused by it.
 
+## 7. Settings backtests (`kvleak tune`)
+
+Claude Code exposes a handful of settings that move cache money. `tune` replays
+your last 30 days under each candidate value and reports the difference:
+
+| setting | how it is replayed |
+|---|---|
+| `autoCompactWindow` | The compaction backtest of §6, but the rule is "compact whenever the context reaches W" for each W in 100k … 800k. The recommended W is the largest one that still captures 80% of the best saving (fewest compactions for most of the money); `--min-window` sets a floor. The post-compaction size is the median of your real compactions. |
+| `promptCacheTtl` | Every call is re-priced under a 5m and a 1h TTL. A gap shorter than the TTL is a hit (new tokens at that TTL's write price, the rest read), a longer gap rebuilds the prompt. Misses that were not TTL-caused stay as they happened. |
+| `subagentPromptCacheTtl` | Same replay over subagent transcripts. |
+| `CLAUDE_CODE_PROMPT_CACHE_TTL` for `claude -p` batches | One-shot runs share a prefix across runs, so the replay orders them by time and rewrites the shared prefix whenever the gap between runs exceeds the TTL. The prompt itself is written once and never read back under either TTL, so the cheaper write usually wins. |
+| `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | For every idle gap of 54 min or more in a 1h-TTL session: the rebuild that idle compaction avoids minus what the compaction costs, at the default 200k threshold and at 100k. |
+
+**Dead writes.** A cache write costs 1.25× (5m) or 2× (1h) the plain input
+price. When nothing reads that entry before it expires (the last call of a
+session, a call right before a long gap, or a one-shot `claude -p` prompt), the
+premium was wasted. The audit sums it and names the workload it comes from.
+
 ## Caveats
 
 * Claude Code timestamps are written when a response finishes, not when the

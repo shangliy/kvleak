@@ -214,7 +214,7 @@ footer .row { display: flex; flex-wrap: wrap; gap: 8px 22px; }
         <div class="stat" role="listitem"><b class="num">97.5%</b><span>cache hit rate, interactive sessions</span></div>
         <div class="stat bad" role="listitem"><b class="num">27.5%</b><span>of input spend went to rebuilds</span></div>
         <div class="stat" role="listitem"><b class="num">2.2%</b><span>of calls carried 54% of uncached input</span></div>
-        <div class="stat good" role="listitem"><b class="num">−63%</b><span>input spend with 10 well-timed compactions</span></div>
+        <div class="stat good" role="listitem"><b class="num">−58%</b><span>input spend with auto-compact at 200k</span></div>
       </div>
     </div></div>
   </section>
@@ -309,14 +309,15 @@ footer .row { display: flex; flex-wrap: wrap; gap: 8px 22px; }
           <table class="data">
             <thead><tr><th>compact only above</th><th>compactions in 30 days</th><th>input spend</th><th>saved</th></tr></thead>
             <tbody>
-              <tr><td>100k tokens</td><td>119</td><td>$1,272</td><td>$1,008 · 80.6%</td></tr>
-              <tr><td>200k tokens</td><td>39</td><td>$1,272</td><td>$933 · 74.9%</td></tr>
-              <tr class="hl"><td>400k tokens</td><td>10</td><td>$1,272</td><td>$778 · 63.2%</td></tr>
+              <tr><td>100k tokens</td><td>334</td><td>$1,297</td><td>$832 · 66.7%</td></tr>
+              <tr class="hl"><td>200k tokens</td><td>98 (≈3 per session)</td><td>$1,297</td><td>$721 · 57.7%</td></tr>
+              <tr><td>400k tokens</td><td>23</td><td>$1,297</td><td>$487 · 40.2%</td></tr>
             </tbody>
           </table>
         </div>
         <figcaption>Source: <code>kvleak advise --backtest</code> on 33 main sessions. Money only: it assumes the summary keeps what the rest of the session needs.</figcaption>
       </figure>
+      <p>You don't have to watch for the hint, either. Claude Code can compact for you at a context size you choose (<code>autoCompactWindow</code>), and it can pick the cache TTL and compact idle sessions before the cache dies. The defaults are tuned for nobody in particular. <code>kvleak tune</code> replays your own history under each value and <code>--apply</code> writes the winners to <code>settings.json</code>. On my 30 days: <strong>−$909, 45% of input spend</strong>, most of it from auto-compacting at 200k instead of ~967k, the rest from a 5-minute TTL on one-shot <code>claude -p</code> batches whose prompts are written at 2× and never read back.</p>
       <p class="note">This counts money only. A summary can drop a detail you needed later, and that cost doesn't show up here. Compact at natural breaks: after a feature lands, before switching tasks. Even the cautious row, ten compactions in a month, cuts the bill by almost two thirds.</p>
     </div></div>
   </section>

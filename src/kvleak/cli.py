@@ -5,6 +5,8 @@
     kvleak --html report.html    shareable report
     kvleak session <id>          step-by-step timeline of one session
     kvleak advise                compact or hand off now? (newest session)
+    kvleak tune                  backtest Claude Code's cache settings on your history
+    kvleak tune --apply          ...and write the winners to ~/.claude/settings.json
     kvleak breakeven 150k        should I keep this cache alive?
     kvleak statusline --install  live TTL countdown in Claude Code
     kvleak pointer build.log     compact hand-off message for multi-agent boards
@@ -30,7 +32,9 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
-SUBCOMMANDS = {"audit", "session", "advise", "breakeven", "statusline", "pointer", "models"}
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "breakeven", "statusline", "pointer", "models"}
+TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl")
+TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
 
 
 # ------------------------------------------------------------------------- helpers
@@ -214,6 +218,195 @@ def cmd_advise(args) -> int:
     return 0
 
 
+def _settings_path() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
+
+
+def _read_settings() -> Optional[dict]:
+    """Parsed ~/.claude/settings.json; {} when missing, None when it is not valid JSON."""
+    settings = _settings_path()
+    if not settings.exists():
+        return {}
+    try:
+        return json.loads(settings.read_text(encoding="utf-8"))
+    except ValueError:
+        print("kvleak: {} is not valid JSON; not touching it.".format(settings), file=sys.stderr)
+        return None
+
+
+def _write_settings(data: dict) -> Path:
+    settings = _settings_path()
+    if settings.exists():
+        shutil.copy(settings, str(settings) + ".kvleak.bak")
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return settings
+
+
+def cmd_tune(args) -> int:
+    from .advisor import Profile
+    from .policy import (
+        IDLE_COMPACT_DEFAULT_MIN,
+        best_ttl,
+        idle_compaction,
+        observed_ttl,
+        pick_window,
+        split,
+        subagent_starts,
+        window_sweep,
+    )
+
+    c = fmt.c
+    if args.reset:
+        return _reset_tune()
+    since = args.since if args.since is not None else time.time() - 30 * 86400
+    transcripts = load_all(_default_paths(args), args.format, since, args.project)
+    if not transcripts:
+        print("kvleak: no transcripts in that window", file=sys.stderr)
+        return 1
+    report = analyze(transcripts, args.min_miss, 0)
+    groups = split(transcripts)
+    main_t = groups["main"]
+    calls = sum(len(t.steps) for t in main_t + groups["subagent"])
+    misses = sum(1 for m in report.misses if m.cause not in ("cold_start", "subagent_cold_start"))
+    prof = Profile.from_transcripts(main_t + groups["subagent"], misses, calls)
+    settings = _read_settings() or {}
+    env = {**settings.get("env", {}), **os.environ}
+    model = max(report.model_mix, key=report.model_mix.get) if report.model_mix else None
+    plan: dict = {"settings": {}, "env": {}, "rows": []}
+    rows = [["setting", "now", "best", "saving / {}".format(_window_label(since)), "why"]]
+
+    def row(name, now, best, saving, why, key=None, value=None, env_key=None):
+        rows.append([name, now, c(best, "green", "bold") if best != now else best,
+                     c(fmt.usd(saving), "green") if saving >= 1 else "–", why])
+        plan["rows"].append({"setting": name, "now": now, "best": best, "saving_usd": round(saving, 2), "why": why})
+        if saving >= 1 and best != now:
+            if key:
+                plan["settings"][key] = value
+            if env_key:
+                plan["env"][env_key] = value
+
+    # 1. auto-compact window: the biggest lever, because every call re-reads the whole context.
+    sweep = window_sweep(main_t, price_for, prof)
+    pick = pick_window(sweep, args.min_window)
+    now_w = (settings.get("modelSettings", {}).get(model or "", {}).get("autoCompactWindow")
+             or env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or settings.get("autoCompactWindow"))
+    now_label = fmt.tok(parse_tokens(str(now_w))) if now_w else "auto (~967k)"
+    real = sum(1 for t in main_t for s in t.steps if s.after_compaction)
+    if pick:
+        row("autoCompactWindow", now_label, fmt.tok(pick.window), pick.saved_usd,
+            "{} compactions over {} sessions instead of {} · −{} of input spend".format(
+                pick.compactions, pick.sessions, real, fmt.pct(pick.saved_pct)),
+            key="autoCompactWindow", value=pick.window)
+    else:
+        row("autoCompactWindow", now_label, now_label, 0.0, "no window beats what you do by hand")
+    plan["window_sweep"] = [vars(r) for r in sweep]
+
+    # 2. prompt-cache TTL, main conversation vs subagents vs one-shot runs.
+    for name, kind, key, env_key, label in (
+        ("promptCacheTtl", "main", "promptCacheTtl", "CLAUDE_CODE_PROMPT_CACHE_TTL", "interactive sessions"),
+        ("subagentPromptCacheTtl", "subagent", "subagentPromptCacheTtl", "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", "subagents"),
+        ("`claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL", "headless", None, None, "one-shot runs"),
+    ):
+        ts = groups[kind]
+        if not ts:
+            continue
+        sim = best_ttl(ts, price_for, "headless" if kind == "headless" else "main")
+        now_ttl = env.get(env_key or "", settings.get(key or "")) if (env_key or key) else None
+        now_ttl = now_ttl or observed_ttl(ts) or "5m"
+        best = min(sim.values(), key=lambda r: r.cost_usd)
+        other = sim["5m" if best.ttl == "1h" else "1h"]
+        saving = other.cost_usd - best.cost_usd if best.ttl != now_ttl else 0.0
+        why = "{} {}: {} costs {}, {} costs {}".format(
+            len(ts), label, best.ttl, fmt.usd(best.cost_usd), other.ttl, fmt.usd(other.cost_usd))
+        if kind == "headless":
+            why += " · set it in the batch script, not globally"
+            row(name, now_ttl, best.ttl, saving, why)
+        else:
+            row(name, now_ttl, best.ttl, saving, why, key=key, value=best.ttl)
+
+    # 3. idle compaction threshold (Claude Code compacts idle 1h sessions itself; lower the bar?).
+    if main_t:
+        base = idle_compaction(main_t, price_for, IDLE_COMPACT_DEFAULT_MIN, prof.compact_floor)
+        low = idle_compaction(main_t, price_for, 100_000, prof.compact_floor)
+        now_min = env.get("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS")
+        now_label = fmt.tok(int(now_min)) if now_min else "200k"
+        gain = low.net_usd - base.net_usd
+        off = settings.get("idleCompaction") is False
+        why = "{} idle gaps ≥54 min · compacting there nets {} at 200k, {} at 100k".format(
+            base.idle_gaps, fmt.usd(base.net_usd), fmt.usd(low.net_usd))
+        if off:
+            why += " · idleCompaction is OFF in your settings"
+        row("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", now_label, "100k" if gain >= 1 else now_label, max(gain, 0.0), why,
+            env_key="CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS", value="100000")
+
+    # 4. subagent cold starts: no setting to flip, but three knobs in the agent file.
+    sub = subagent_starts(transcripts, price_for)
+    if sub.count:
+        row("subagent cold starts", "{} × {} avg".format(sub.count, fmt.tok(sub.avg)), "smaller", 0.0,
+            "{} on first calls · omitClaudeMd: true, a `tools:` allowlist, or context: fork to share the parent's cache".format(
+                fmt.usd(sub.cost_usd)))
+
+    total = sum(r["saving_usd"] for r in plan["rows"])
+    if args.json:
+        print(json.dumps(plan, indent=2, sort_keys=True))
+        return 0
+    print(c("\n  kvleak tune · {} sessions + {} subagents + {} one-shot runs · {} input spend over the last {}".format(
+        len(main_t), len(groups["subagent"]), f"{len(groups['headless']):,}", fmt.usd(report.cost_usd),
+        _window_label(since)), "bold"))
+    print(c("  Each setting replayed on your own transcripts. Money only; compaction also loses detail.\n", "grey"))
+    print(fmt.table(rows, "lllrl"))
+    print()
+    if plan["settings"] or plan["env"]:
+        print("  Total if applied: " + c(fmt.usd(total), "green", "bold") + " per {}".format(_window_label(since)))
+        if args.apply:
+            return _apply_tune(plan)
+        print("  Write these to {}: ".format(_settings_path()) + c("kvleak tune --apply", "bold")
+              + c("  (undo: kvleak tune --reset)", "grey"))
+    else:
+        print("  Your settings already match your history. Nothing to change.")
+    return 0
+
+
+def _window_label(since: float) -> str:
+    days = max(int(round((time.time() - since) / 86400)), 1)
+    return "{}d".format(days)
+
+
+def _apply_tune(plan: dict) -> int:
+    data = _read_settings()
+    if data is None:
+        return 1
+    data.update(plan["settings"])
+    if plan["env"]:
+        data.setdefault("env", {}).update(plan["env"])
+    settings = _write_settings(data)
+    for k, v in plan["settings"].items():
+        print("  wrote {} = {}".format(k, json.dumps(v)))
+    for k, v in plan["env"].items():
+        print("  wrote env.{} = {}".format(k, json.dumps(v)))
+    print("  → {}  (restart Claude Code; undo with kvleak tune --reset)".format(settings))
+    return 0
+
+
+def _reset_tune() -> int:
+    data = _read_settings()
+    if not data:
+        print("kvleak: nothing to reset")
+        return 0
+    removed = [k for k in TUNE_KEYS if data.pop(k, None) is not None]
+    env = data.get("env", {})
+    removed += ["env." + k for k in TUNE_ENV if env.pop(k, None) is not None]
+    if not env and "env" in data:
+        del data["env"]
+    if removed:
+        _write_settings(data)
+        print("Removed {} from {}".format(", ".join(removed), _settings_path()))
+    else:
+        print("kvleak: no tuned settings found")
+    return 0
+
+
 def _find_session(paths: List[str], needle: str) -> Optional[str]:
     if os.path.isfile(needle):
         return needle
@@ -311,14 +504,9 @@ def cmd_statusline(args) -> int:
         from .statusline import main as sl_main
 
         return sl_main()
-    settings = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
-    data = {}
-    if settings.exists():
-        try:
-            data = json.loads(settings.read_text(encoding="utf-8"))
-        except ValueError:
-            print("kvleak: {} is not valid JSON; not touching it.".format(settings), file=sys.stderr)
-            return 1
+    data = _read_settings()
+    if data is None:
+        return 1
     exe = shutil.which("kvleak")
     if exe:
         command = "{} statusline".format(exe)
@@ -331,11 +519,8 @@ def cmd_statusline(args) -> int:
         print("kvleak: you already have a statusLine:\n  {}\nRe-run with --force to replace it, or add\n  {}\n"
               "to your own statusline script.".format(json.dumps(existing), command))
         return 1
-    if settings.exists():
-        shutil.copy(settings, str(settings) + ".kvleak.bak")
     data["statusLine"] = {"type": "command", "command": command, "padding": 0}
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    settings = _write_settings(data)
     print("Installed. Claude Code will show the cache countdown on its next refresh.\n"
           "  settings: {}\n  undo:     kvleak statusline --uninstall".format(settings))
     return 0
@@ -396,6 +581,15 @@ def build_parser() -> argparse.ArgumentParser:
     ad.add_argument("--backtest", action="store_true", help="replay your history with the advisor in the loop")
     ad.set_defaults(func=cmd_advise)
 
+    tu = sub.add_parser("tune", help="backtest Claude Code's cache settings on your history (last 30d by default)")
+    _add_common(tu)
+    tu.add_argument("--min-window", type=parse_tokens, default=150_000, metavar="TOKENS",
+                    help="never recommend auto-compacting below this context size (default 150k)")
+    tu.add_argument("--apply", action="store_true", help="write the recommended settings to ~/.claude/settings.json")
+    tu.add_argument("--reset", action="store_true", help="remove every setting kvleak tune wrote")
+    tu.add_argument("--json", action="store_true", help="machine-readable plan")
+    tu.set_defaults(func=cmd_tune)
+
     b = sub.add_parser("breakeven", help="keep-alive vs. rebuild calculator")
     b.add_argument("tokens", type=parse_tokens, help="cached prefix size, e.g. 150k")
     b.add_argument("--model", default="claude-opus-5-5")
@@ -445,15 +639,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _uninstall_statusline() -> int:
-    settings = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
-    try:
-        data = json.loads(settings.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    data = _read_settings()
+    if not data:
         print("kvleak: nothing to uninstall")
         return 0
     if "kvleak" in json.dumps(data.get("statusLine", "")):
         del data["statusLine"]
-        settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        settings = _write_settings(data)
         print("Removed kvleak statusline from {}".format(settings))
     else:
         print("kvleak statusline is not installed")
