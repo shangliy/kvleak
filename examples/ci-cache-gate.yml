@@ -1,0 +1,5 @@
+# Fail a nightly agent job if more than 15% of its input spend leaked to cache misses.
+# Drop into .github/workflows/ next to the job that produces your agent transcripts.
+- name: Cache-efficiency gate
+  run: |
+    pipx run kvleak --path ./agent-logs --markdown "$GITHUB_STEP_SUMMARY" --fail-over 15

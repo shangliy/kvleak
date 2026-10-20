@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to ~/.config/kvleak/pricing.json (or point $KVLEAK_PRICING at it). Keys match model ids by substring; longest key wins. Prices are placeholders: fill in your provider's current rates.",
+  "my-provider-large": { "input_per_mtok": 2.50, "read_mult": 0.25 },
+  "my-provider-small": { "input_per_mtok": 0.30, "read_mult": 0.25, "write_5m_mult": 1.0, "write_1h_mult": 1.0 }
+}

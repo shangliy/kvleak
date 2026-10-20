@@ -1,0 +1,41 @@
+# kvleak
+
+**找出你的 AI 编程 Agent 在 Prompt Cache 上漏掉了多少钱，以及怎么堵上。**  ·  [English](README.md)
+
+表面缓存命中率 90%+，账单却依然很贵？因为缓存**未命中比命中贵约 12 倍**，而且未命中虽然少、单次却很大：空闲超过 5 分钟 TTL、会话中途切模型、一次性子 Agent 冷启动……真实审计中，**约 5% 的调用吃掉了约一半的全价输入 Token**。
+
+`kvleak` 直接读取本机已有的会话记录，找出每一次昂贵的缓存击穿，告诉你**为什么**发生，并折算成美元。
+
+```bash
+uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
+```
+
+零依赖、零配置、不需要 API Key、不联网。默认读取 `~/.claude/projects`，其他带 token usage 的 JSONL 用 `--path` 指定。
+
+## 功能
+
+| 命令 | 作用 |
+|---|---|
+| `kvleak` | 全量审计：命中率、漏损金额、按原因拆解、最漏的会话、最贵的单次未命中、可执行建议 |
+| `kvleak --since 7d --html report.html` | 生成可分享的自包含 HTML 报告（亦支持 `--markdown` / `--json`） |
+| `kvleak session <id>` | 单个会话逐步时间线，标出每一次未命中及原因 |
+| `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89` |
+| `kvleak breakeven 150k --idle 20m` | 保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
+| `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
+| `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
+
+## 未命中原因分类
+
+| 原因 | 含义 | 修复方向 |
+|---|---|---|
+| 空闲超过 TTL | 离开超过 5 分钟（或 1 小时），下一条消息全量重建 | 看倒计时及时回复、批量处理、按盈亏平衡点限制保活次数 |
+| TTL 内前缀变化 | 时间戳、未排序 JSON、工具列表变化导致前缀击穿 | 前缀确定性：`json.dumps(..., sort_keys=True)`、静态 System Prompt |
+| 会话中途切模型 | KV Cache 按模型物理隔离，切换必然全价重算 | 每个 Worker 锁定单一模型，跨模型用文件指针交接 |
+| 历史压缩 | `/compact` 或自动压缩重写历史 | 在自然断点主动压缩一次 |
+| 冷启动 / 子 Agent 冷启动 | 新 Agent 全价加载系统提示词与工具 Schema | 复用常驻 Worker，保持 System Prompt 完全一致 |
+
+## 多 Agent / 多模型
+
+[多 Agent 缓存手册（英文）](docs/playbook.md) 介绍六层优化：单 Worker 锁定模型并用指针交接、「脚本 → 小模型 → 大模型」算力漏斗、常驻 Worker 与 TTL 窗口批处理、公共看板瘦身契约（15 行以内）、确定性前缀、按水位线主动压缩。手册里附有一段可以直接粘贴进 Swarm 指令的契约。
+
+MIT 协议，欢迎贡献！
