@@ -181,3 +181,44 @@ context instead of the main one.
 nothing ever read back: $206 of it in one-shot `claude -p` runs, where every
 prompt is written at the 1h rate (2×) for a single use. That is 42% of what
 those runs cost, hence the 5m TTL recommendation for batch scripts.
+
+## 7. Steps, not tokens: mechanical chains and `kvleak refine`
+
+The same 33 sessions, re-read for *how many calls* did the work rather than
+how many tokens each carried (method in
+[how-it-works §8](how-it-works.md#8-context-diet-kvleak-diet), "Mechanical
+chains"):
+
+| | |
+|---|---:|
+| billed calls | 9,924 |
+| calls inside 20+ call loops | 4,754 (48%) |
+| mechanical chains (≥3 consecutive ls/cat/grep/read steps, <200 thinking tokens, <300 chars of reply) | **493** |
+| calls inside those chains | **2,235 (23%)** |
+| upper bound saved had each chain been one script | **$160** |
+
+The five largest chains are polling loops the model ran one `until`/`ls`/`date`
+at a time against a 450–800k context (up to 19 steps, $5.43 for one chain),
+and a `sed -n` walk through a paper, 8 to 17 lines at a time. Each step cost
+more to *show up* than to do.
+
+`kvleak refine` turns these numbers into rules and keeps only the ones that
+clear $5 of evidence in the window:
+
+| rule | evidence on this history | worth / 30 d |
+|---|---|---:|
+| `loops-in-subagents` | 116 loops of 20+ calls re-read 4,754 calls of history for $353 | $320 |
+| `batch-steps` | 493 chains, 2,235 calls | $160 |
+| `scripts-in-files` | inline scripts were 21% of the context, carried for $206 | $103 (half, to be conservative) |
+| `shell-output` | 270 Bash results over 8k chars | $32 |
+| `edit-not-write` | Written files 5% of the context, largest 27k tokens | $24 |
+| `terse-in-loops` | reply text 4%: **below the 8% gate, not proposed** | – |
+
+Together about $640 per 30 days, against a cost of ≈150 tokens per call to
+carry the block. `--probe` results will be added here once a week of
+sessions has run under the rules; the maintainer's sessions before that date
+are the baseline.
+
+The `PostToolUse` hook would have acted on the same 270 results as the
+`bashOutputMaxChars 8000` row of `kvleak tune` ($32), with the difference that
+the model keeps the error lines and a path instead of a cut-off.

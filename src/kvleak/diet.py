@@ -37,6 +37,10 @@ PLAIN_KINDS = (USER_KIND, TEXT_KIND, THINKING_KIND, SYSTEM_KIND)  # everything e
 INPUT_SUFFIX = " inputs"  # "Bash inputs": what the model sent to the tool
 LONG_TURN = 20  # calls; a turn this long is a loop worth moving to a subagent
 SUBAGENT_START = 20_000  # context a fresh subagent starts with
+MECHANICAL_TOOLS = {"Bash", "Read", "Grep", "Glob", "LS"}  # steps a script could take without the model
+MECHANICAL_THINKING = 200  # tokens; less than this and the step was not a decision
+MECHANICAL_TEXT = 300  # chars of reply
+CHAIN_MIN = 3  # consecutive mechanical calls that would have been one script
 
 
 @dataclass
@@ -65,6 +69,34 @@ class Turn:
 
 
 @dataclass
+class Call:
+    """One billed model call: what it decided and what it asked for."""
+
+    index: int
+    turn: int
+    context: int
+    thinking: int = 0
+    text_chars: int = 0
+    tools: List[Tuple[str, str]] = field(default_factory=list)  # (tool, label)
+
+    @property
+    def mechanical(self) -> bool:
+        return bool(self.tools) and all(t in MECHANICAL_TOOLS for t, _ in self.tools) \
+            and self.thinking < MECHANICAL_THINKING and self.text_chars < MECHANICAL_TEXT
+
+
+@dataclass
+class Chain:
+    """Consecutive mechanical calls in one turn: a loop the model ran one step at a time."""
+
+    start: int
+    calls: int
+    context: int
+    labels: List[str]
+    saving_usd: float = 0.0  # had the chain been one script: (calls − 1) re-reads of the context
+
+
+@dataclass
 class Diet:
     session_id: str
     calls: int
@@ -75,6 +107,8 @@ class Diet:
     output_tokens: int = 0
     thinking_tokens: int = 0
     effort: Dict[Tuple[str, str], List[int]] = field(default_factory=dict)  # (model, effort) -> [calls, thinking]
+    call_list: List[Call] = field(default_factory=list)
+    chains: List[Chain] = field(default_factory=list)
 
     def by_kind(self) -> Dict[str, dict]:
         out: Dict[str, dict] = {}
@@ -163,6 +197,8 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
     model = None
     out_tokens = think_tokens = 0
     effort: Dict[Tuple[str, str], List[int]] = defaultdict(lambda: [0, 0])
+    calls: List[Call] = []
+    call_of_msg: Dict[str, Call] = {}
     with open(path, "rb") as f:
         for raw in f:
             try:
@@ -176,6 +212,16 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                 compaction_at.append(call)
                 continue
             if t == "assistant":
+                usage = m.get("usage")
+                key = (m.get("id"), d.get("requestId"))
+                is_call = bool(usage) and key not in seen_calls and m.get("model") != "<synthetic>"
+                if is_call:
+                    prompt_now = (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0) + (usage.get("cache_read_input_tokens") or 0)
+                    this_call = Call(call, len(turns) if turn is None else len(turns) - 1, prompt_now,
+                                     (usage.get("output_tokens_details") or {}).get("thinking_tokens") or 0)
+                    calls.append(this_call)
+                    call_of_msg[m.get("id") or ""] = this_call
+                meta = call_of_msg.get(m.get("id") or "")
                 # Claude Code writes one line per content block; the reply's blocks enter the
                 # context with the *next* call, so they go to `pending` like a tool result.
                 for part in content if isinstance(content, list) else []:
@@ -185,11 +231,13 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                         name, inp = part.get("name") or "?", part.get("input") or {}
                         tool_names[part.get("id", "")] = (name, inp)
                         pending.append(Block(name + INPUT_SUFFIX, _label(name, inp), call, len(json.dumps(inp)) / CHARS_PER_TOKEN))
+                        if meta:
+                            meta.tools.append((name, _label(name, inp)))
                     elif part.get("type") == "text":
                         pending.append(Block(TEXT_KIND, _first_line(part.get("text") or ""), call, len(part.get("text") or "") / CHARS_PER_TOKEN))
-                usage = m.get("usage")
-                key = (m.get("id"), d.get("requestId"))
-                if not usage or key in seen_calls or m.get("model") == "<synthetic>":
+                        if meta:
+                            meta.text_chars += len(part.get("text") or "")
+                if not is_call:
                     continue
                 seen_calls.add(key)
                 model = m.get("model") or model
@@ -259,7 +307,32 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
         tn.history_usd = price.usd(tn.calls * tn.context * r_eff) or 0.0
         tn.subagent_saving_usd = price.usd(tn.calls * max(tn.context - SUBAGENT_START, 0) * r_eff) or 0.0 if tn.calls >= LONG_TURN else 0.0
     sid = os.path.splitext(os.path.basename(path))[0]
-    return Diet(sid, call, peak, blocks, turns, len(set(compaction_at)), out_tokens, think_tokens, dict(effort))
+    return Diet(sid, call, peak, blocks, turns, len(set(compaction_at)), out_tokens, think_tokens, dict(effort),
+                calls, find_chains(calls, price, r_eff))
+
+
+def find_chains(calls: List[Call], price: Price, r_eff: float) -> List[Chain]:
+    """Runs of ≥CHAIN_MIN mechanical calls in one turn, priced as the re-reads a script would have skipped."""
+    chains: List[Chain] = []
+    run: List[Call] = []
+
+    def flush():
+        if len(run) >= CHAIN_MIN:
+            first = run[0]
+            labels = [lbl for c in run for _, lbl in c.tools][:6]
+            chains.append(Chain(first.index, len(run), first.context, labels,
+                                price.usd((len(run) - 1) * first.context * r_eff) or 0.0))
+        run.clear()
+
+    for c in calls:
+        if c.mechanical and (not run or run[-1].turn == c.turn):
+            run.append(c)
+        else:
+            flush()
+            if c.mechanical:
+                run.append(c)
+    flush()
+    return sorted(chains, key=lambda ch: -ch.saving_usd)
 
 
 @dataclass
@@ -276,6 +349,12 @@ class Aggregate:
     subagent_saving_usd: float = 0.0
     effort: Dict[Tuple[str, str], List[int]] = field(default_factory=dict)
     bash_blocks: List[Tuple[str, Block]] = field(default_factory=list)  # every Bash result, for cap backtests
+    turns: int = 0
+    chains: int = 0
+    chain_calls: int = 0
+    chain_saving_usd: float = 0.0
+    chain_examples: List[Tuple[str, Chain]] = field(default_factory=list)
+    carry_usd: float = 0.0
 
 
 def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Aggregate:
@@ -306,9 +385,18 @@ def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Agg
             e = agg.effort.setdefault(k, [0, 0])
             e[0] += n
             e[1] += th
+        agg.turns += len(d.turns)
+        agg.carry_usd += d.carry_usd
+        for ch in d.chains:
+            agg.chains += 1
+            agg.chain_calls += ch.calls
+            agg.chain_saving_usd += ch.saving_usd
+        agg.chain_examples.extend((d.session_id, ch) for ch in d.chains[:3])
     agg.kinds = dict(sorted(agg.kinds.items(), key=lambda kv: -kv[1]["carry_usd"]))
     agg.top.sort(key=lambda sb: -sb[1].carry_usd)
     agg.top = agg.top[:10]
+    agg.chain_examples.sort(key=lambda sc: -sc[1].saving_usd)
+    agg.chain_examples = agg.chain_examples[:5]
     return agg
 
 

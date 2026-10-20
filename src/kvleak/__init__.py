@@ -1,6 +1,6 @@
 """kvleak: find out where your AI coding agent leaks prompt-cache money."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 REPO_URL = "https://github.com/shangliy/kvleak"
 
 from .analyze import Report, analyze, classify  # noqa: E402

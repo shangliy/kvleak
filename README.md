@@ -66,6 +66,8 @@ No API key, no config, no network calls, no dependencies. It reads
 | `kvleak tune --apply` on the same 30 days | **−$909 (−45%)** from four settings Claude Code already has; auto-compact at 200k instead of ~967k is **−58%** alone |
 | What filled the context (`kvleak diet --all`, 33 sessions, 20.8M tokens) | **29%** shell output, **21%** scripts the model sent to the shell, **14%** thinking (kept in context on current models), 10% pasted text, 6% the ~40k system prompt; whole-file reads only 4% |
 | Long tool loops (≥20 calls) replayed as subagents | 114 loops re-read their starting history 4,707 times for $351; in fresh subagents **−$319** |
+| Mechanical chains (3+ consecutive `ls`/`cat`/`grep`/read steps with no decision between them) | **493 chains, 2,235 of 9,924 calls**; as single scripts, up to **−$160** |
+| `kvleak refine` on the same history | 5 rules for CLAUDE.md, each with its evidence; together they cover **≈$640 / 30 d** of measured waste |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -82,6 +84,9 @@ Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 | `kvleak advise` | Tells you whether to **`/compact` or hand off to a fresh session now**, and when that pays for itself. `--backtest` replays your history with the advisor in the loop. |
 | `kvleak tune --apply` | Backtests Claude Code's own cache settings (auto-compact window, cache TTLs, idle compaction) on your history and **writes the winners to `settings.json`**. |
 | `kvleak diet` | Shows **what filled the context** (tool results, your pastes, the replies themselves, the system prompt) and what each piece cost to carry, with the costliest single items named. `--all` aggregates 30 days. |
+| `kvleak hooks --install` | Claude Code hooks that **keep long shell output out of the context** (the model sees head + tail + error lines + a path to the rest) and **make compaction lossless** (everything dropped is archived and the model is told how to search it). |
+| `kvleak recall "<regex>"` | Searches what a compaction dropped. The model runs it too. |
+| `kvleak refine --apply` | Writes **evidence-backed context-hygiene rules** to `CLAUDE.md`, each gated on a dollar figure from your own history; `--probe` later tells you which rules changed behaviour. |
 | `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die. |
 | `kvleak pointer build.log --status FAIL` | Turns a huge file into a ~60-token hand-off message for multi-agent boards. |
 | `kvleak --fail-over 15` | Exits with code 2 when more than 15% of input spend leaked, so it can gate CI or nightly jobs. |
@@ -233,6 +238,72 @@ the lever is compaction, not effort. The biggest single number is the **long
 turns**: 114 tool loops of 20+ calls re-read the history they started with
 4,707 times. Run those loops in a fresh subagent and $319 of that goes away.
 
+`diet` also counts **mechanical chains**: three or more consecutive calls that
+each run one `ls`, `cat`, `grep`, `find` or small read with no real decision
+in between (under 200 thinking tokens, under 300 characters of reply). Every
+step re-reads the whole context; a script would read it once. On the same
+history: 493 chains, 2,235 of 9,924 calls, up to −$160 as scripts. Calls, not
+tokens, are the bill.
+
+## Borrowed from REPL harnesses: hooks, recall, refine
+
+Harnesses that give the model a persistent REPL instead of a tool list
+([Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)) keep tool
+output in *variables*: the model prints what it needs, the rest stays out of
+the prompt, and the history a compaction replaces stays retrievable. Harness
+improvement loops ([Harness²](https://github.com/google-research/harness2))
+edit the files around a fixed model and keep only edits that evidence
+supports. Claude Code can't change its tool model, but its hooks and
+`CLAUDE.md` are enough to get most of both.
+
+```bash
+kvleak hooks --install      # four hooks in ~/.claude/settings.json (undo: --uninstall)
+```
+
+| hook | what it does |
+|---|---|
+| `PostToolUse` on Bash | A result over 8,000 characters (`--max-chars`) is written to `~/.cache/kvleak/outputs/<session>/<id>.txt`. The model sees the head, the tail, every line that looks like an error (with the two lines after it), repeated lines collapsed to `(×N)`, and the path. Nothing is lost; it is one `grep` away. |
+| `PreCompact` | Every tool result, message and reply in the transcript is appended to `~/.cache/kvleak/history/<session>/history.jsonl` before the summary replaces them. |
+| `PostCompact` | The summary is saved next to it, so you can see what the summary kept. |
+| `SessionStart` (compact) | The model is told the archive exists, gets a one-line map of every request in it, and the `kvleak recall` command. The first thing it does after a compaction is no longer "re-run the tests to see what failed". |
+
+```text
+$ kvleak recall "AssertionError" --session 7ff95ce0
+#312 result Bash pytest -q tests/test_policy.py
+    > FAILED tests/test_policy.py::test_window_sweep - AssertionError: assert 98 == 96
+$ kvleak recall --show 312 | head -40
+```
+
+`kvleak refine` is the continual-harness half. It takes what `diet` and `tune`
+measured and proposes a short block for `~/.claude/CLAUDE.md` (or
+`./CLAUDE.md` with `--local`). A rule appears only when its evidence is worth
+at least `--min-usd` (default $5) over the window, and the evidence is written
+into the rule so the model knows why:
+
+```text
+$ kvleak refine
+
+  5 rules with evidence from 33 sessions · 30d
+  • loops-in-subagents  ~$320 / 30d
+    Long loops: when a task will take more than ~20 tool calls (...), run it in a subagent that reports back a few lines
+    evidence: 116 loops of 20+ calls re-read 4,754 calls of history for $353; in subagents that would have been $320 less
+  • batch-steps  ~$160 / 30d
+    Mechanical steps: combine sequences of `ls`, `cat`, `grep`, `find` and small reads into one command or one script
+    evidence: 493 chains of 3+ mechanical calls (2,235 calls); as single scripts they would have saved up to $160
+  • scripts-in-files  ~$103 / 30d
+  • shell-output      ~$32 / 30d
+  • edit-not-write    ~$24 / 30d
+```
+
+`--apply` writes the block (backed up, removable with `--remove`; it costs
+about 150 tokens per call to carry) and records today's behaviour numbers.
+A week later, `kvleak refine --probe` contrasts the sessions since with the
+ones before, one metric per rule (tokens per Bash result, share of calls in
+chains, share of calls in 20+ call loops, ...), and says which rules moved
+their number and which did not. That is Harness²'s probe step run on your
+real sessions instead of a benchmark; it shows whether behaviour changed, not
+that the rule caused it.
+
 ## Should I keep this cache alive?
 
 ```text
@@ -314,7 +385,11 @@ expiries can show up as prefix busts.
 ## Credits
 
 Inspired by the cache-countdown idea in
-[olddonkey/cache-refresher](https://github.com/olddonkey/cache-refresher) and by
-production audits of multi-agent swarms.
+[olddonkey/cache-refresher](https://github.com/olddonkey/cache-refresher), by
+production audits of multi-agent swarms, and for `hooks`/`recall`/`refine` by
+the REPL-harness ideas in [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)
+(context as a variable, retrievable history, `/refine`) and
+[Harness²](https://github.com/google-research/harness2) (propose, probe,
+compose; keep only evidence-backed edits).
 
 MIT licensed. Contributions welcome!

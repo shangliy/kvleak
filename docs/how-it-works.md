@@ -156,6 +156,62 @@ a 20k starting context would have paid for the same loop.
 ten costliest single blocks, totals the long turns, and reports thinking per
 call by model and effort level (the `effort` field on each transcript line).
 
+**Mechanical chains.** A call is *mechanical* when every tool it asks for is
+one of Bash, Read, Grep, Glob or LS, it thought for fewer than 200 tokens and
+replied with fewer than 300 characters: a step a script could have taken. A
+chain is a run of three or more mechanical calls inside one turn. Its price
+is `(calls − 1) × context at the first call × r_eff`, the re-reads one script
+would have skipped. This is an upper bound: some steps needed the previous
+result before the model could choose the next one.
+
+## 9. Hooks (`kvleak hooks`)
+
+Claude Code hooks can replace what the model sees of a tool result
+(`PostToolUse` → `updatedToolOutput`), run before and after a compaction with
+the transcript path and the summary (`PreCompact`, `PostCompact`), and inject
+text when a session starts after a compaction (`SessionStart` with the
+`compact` matcher → `additionalContext`, capped at 10k characters). kvleak
+installs four command hooks that call `kvleak hook <event>`:
+
+| hook | input used | output |
+|---|---|---|
+| `PostToolUse`, matcher `Bash` | `tool_response.stdout/stderr`, `tool_use_id`, `session_id` | When stdout + stderr exceed `--max-chars` (8,000): the full text goes to `~/.cache/kvleak/outputs/<session>/<tool_use_id>.txt`, and `updatedToolOutput` carries a condensed stdout: the first 35% of the budget as head, lines matching an error pattern (plus the two lines after each, up to 20% of the budget), the rest as tail; consecutive identical lines become one line with `(×N)`; `\r` progress updates keep only the final state; a note gives the omitted line count and the path. Other fields of the response are passed through unchanged. Below the cap the hook prints nothing and the result is untouched. |
+| `PreCompact` | `transcript_path`, `session_id` | Every block in the transcript (user text, assistant text, tool calls with their inputs, tool results with their full text, compaction markers) is appended to `~/.cache/kvleak/history/<session>/history.jsonl` as a numbered record; a `state.json` remembers how many records are archived so a second compaction adds only the new ones. A result whose full output was archived by the Bash hook links to that file. |
+| `PostCompact` | `compact_summary` | Saved as `summary-<n>.md` next to the history. |
+| `SessionStart`, matcher `compact` | `session_id`, `source` | If the session has an archive: record and result counts, the archive path, the two `kvleak recall` forms, and one line per archived user request with the record number and the tools used after it (most recent requests kept when the map exceeds 6k characters). |
+
+`kvleak recall` reads the same files: a regex over every record's text (and
+the linked full outputs) prints matching lines with one line of context under
+the record header; `--show N` prints one record whole; no query prints the
+request map. The hook entry point never exits non-zero and logs exceptions to
+`~/.cache/kvleak/hooks.log`, so a broken hook cannot block a session.
+
+## 10. Refine (`kvleak refine`)
+
+`refine` turns the audit into instructions. From the 30-day `diet` aggregate
+it proposes at most six rules, each gated on a number from the same history:
+
+| rule | fires when | evidence line |
+|---|---|---|
+| `shell-output` | carried cost of Bash results beyond 8k chars ≥ `--min-usd` | results over 8k, cost beyond 8k |
+| `scripts-in-files` | Bash inputs ≥ 12% of context and half their carried cost ≥ `--min-usd` | share, carried cost |
+| `loops-in-subagents` | subagent counterfactual of long turns ≥ `--min-usd` | loops, calls, history cost, saving |
+| `batch-steps` | mechanical-chain saving ≥ `--min-usd` | chains, calls, saving |
+| `edit-not-write` | Write inputs ≥ 4% and half their carried cost ≥ `--min-usd` | share, largest, carried cost |
+| `terse-in-loops` | assistant text ≥ 8% and half its carried cost ≥ `--min-usd` | share, carried cost |
+
+The rules are written between `<!-- kvleak:begin -->` and `<!-- kvleak:end -->`
+markers under one heading, so `--apply` replaces its own block and `--remove`
+deletes only that. On `--apply`, eight behaviour metrics are stored in
+`~/.cache/kvleak/refine.json` as the baseline: tokens per Bash result, the
+context shares of Bash inputs, Write inputs and reply text, the share of
+calls inside 20+ call loops and inside mechanical chains, calls per request,
+and carried cost per call. `--probe` recomputes them over the sessions since
+the apply date (at least three) and reports, per rule, the metric it targets
+with the change and a verdict: moved 10% the right way, 10% the wrong way, or
+no clear change. The contrast is behavioural evidence in the Harness² sense,
+not a causal claim.
+
 ## Caveats
 
 * Claude Code timestamps are written when a response finishes, not when the

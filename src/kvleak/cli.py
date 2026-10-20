@@ -8,6 +8,10 @@
     kvleak tune                  backtest Claude Code's cache settings on your history
     kvleak tune --apply          ...and write the winners to ~/.claude/settings.json
     kvleak diet                  what filled the context, and what each piece cost to carry
+    kvleak hooks --install       keep long shell output out of the context; make compaction lossless
+    kvleak recall "<regex>"      search the history a compaction dropped
+    kvleak refine --apply        write evidence-backed context-hygiene rules to ~/.claude/CLAUDE.md
+    kvleak refine --probe        did the rules change behaviour? before/after contrast
     kvleak breakeven 150k        should I keep this cache alive?
     kvleak statusline --install  live TTL countdown in Claude Code
     kvleak pointer build.log     compact hand-off message for multi-agent boards
@@ -33,7 +37,8 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "breakeven", "statusline", "pointer", "models"}
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "breakeven",
+               "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
 
@@ -251,6 +256,7 @@ def cmd_diet(args) -> int:
                 rows.append([sid[:8], kind_label(b.kind), b.label, fmt.tok(b.tokens), "{} calls".format(b.carried), fmt.usd(b.carry_usd)])
             print(fmt.table(rows, "lllrrr"))
         _diet_turns(agg.long_turns, agg.long_turn_calls, agg.history_usd, agg.subagent_saving_usd, None)
+        _diet_chains(agg.chains, agg.chain_calls, agg.chain_saving_usd, agg.chain_examples, agg.calls)
         _diet_thinking(agg.output_tokens, agg.thinking_tokens, agg.effort)
     else:
         paths = _default_paths(args)
@@ -282,13 +288,32 @@ def cmd_diet(args) -> int:
         long = d.long_turns
         _diet_turns(len(long), sum(t.calls for t in long), sum(t.history_usd for t in long),
                     sum(t.subagent_saving_usd for t in long), long[:5])
+        _diet_chains(len(d.chains), sum(ch.calls for ch in d.chains), sum(ch.saving_usd for ch in d.chains),
+                     [(d.session_id, ch) for ch in d.chains[:5]], d.calls)
         _diet_thinking(d.output_tokens, d.thinking_tokens, d.effort)
     print(c("\n  How to shrink it", "bold"))
     for i, tip in enumerate(tips(kinds), 1):
         print("  {}. {}".format(i, tip))
     print(c("  Tokens are calibrated to the API's usage numbers (thinking exact, the rest by size; images by pixels). "
-            "Carried cost = tokens × calls it stayed in the context × cache-read price.", "grey"))
+            "Carried cost = tokens × calls it stayed in the context × cache-read price.\n"
+            "  Keep shell output out of the context automatically: kvleak hooks --install · turn this into rules: kvleak refine", "grey"))
     return 0
+
+
+def _diet_chains(n: int, calls: int, saving_usd: float, examples, total_calls: int) -> None:
+    from .diet import CHAIN_MIN
+
+    c = fmt.c
+    if not n:
+        return
+    print(c("\n  Mechanical chains (≥{} consecutive ls/cat/grep/read steps with no real decision between them)".format(CHAIN_MIN), "bold"))
+    print("  {} chains · {} of {} calls · each step re-read the whole context · as single scripts: up to {}".format(
+        n, f"{calls:,}", f"{total_calls:,}", c("−" + fmt.usd(saving_usd), "green", "bold")))
+    if examples:
+        rows = [["session", "starts at call", "steps", "context then", "what they did", "as one script"]]
+        for sid, ch in examples:
+            rows.append([sid[:8], str(ch.start), str(ch.calls), fmt.tok(ch.context), " · ".join(ch.labels[:3])[:60], "−" + fmt.usd(ch.saving_usd)])
+        print(fmt.table(rows, "lrrrlr"))
 
 
 def _diet_table(kinds: dict, total: float, top: int) -> None:
@@ -329,13 +354,15 @@ def _diet_thinking(output: int, thinking: int, effort: dict) -> None:
         fmt.tok(thinking), fmt.tok(output), fmt.pct(thinking / output), (" · " + " · ".join(parts)) if parts else ""))
 
 
-def _settings_path() -> Path:
+def _settings_path(project: bool = False) -> Path:
+    if project:
+        return Path.cwd() / ".claude" / "settings.json"
     return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
 
 
-def _read_settings() -> Optional[dict]:
+def _read_settings(project: bool = False) -> Optional[dict]:
     """Parsed ~/.claude/settings.json; {} when missing, None when it is not valid JSON."""
-    settings = _settings_path()
+    settings = _settings_path(project)
     if not settings.exists():
         return {}
     try:
@@ -345,8 +372,8 @@ def _read_settings() -> Optional[dict]:
         return None
 
 
-def _write_settings(data: dict) -> Path:
-    settings = _settings_path()
+def _write_settings(data: dict, project: bool = False) -> Path:
+    settings = _settings_path(project)
     if settings.exists():
         shutil.copy(settings, str(settings) + ".kvleak.bak")
     settings.parent.mkdir(parents=True, exist_ok=True)
@@ -658,6 +685,159 @@ def parse_since_seconds(value: str) -> int:
     return int(m.group(1)) * {"": 60, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
+def _kvleak_command() -> str:
+    """How settings.json should invoke kvleak."""
+    exe = shutil.which("kvleak")
+    if exe:
+        return exe
+    if shutil.which("uvx"):  # running from an ephemeral `uvx kvleak` env; don't pin its path
+        return "uvx kvleak"
+    return "{} -m kvleak".format(sys.executable)
+
+
+def cmd_hook(args) -> int:
+    from .hooks import run_hook
+
+    return run_hook(args.event, args.max_chars)
+
+
+def cmd_hooks(args) -> int:
+    from .hooks import cache_root, install, installed, uninstall
+
+    data = _read_settings(args.project)
+    if data is None:
+        return 1
+    if args.uninstall:
+        if not installed(data):
+            print("kvleak hooks are not installed")
+            return 0
+        settings = _write_settings(uninstall(data), args.project)
+        print("Removed kvleak hooks from {}".format(settings))
+        return 0
+    if not args.install:
+        have = installed(data)
+        print("kvleak hooks: {}".format(", ".join(have) if have else "not installed") + "\n"
+              "  archive: {}\n  install: kvleak hooks --install [--max-chars 8000] [--project]".format(cache_root()))
+        return 0
+    settings = _write_settings(install(data, _kvleak_command(), args.max_chars), args.project)
+    print("Installed in {}:\n"
+          "  PostToolUse (Bash)      results over {:,} chars go to {}/outputs/<session>/ and the model sees head + tail +\n"
+          "                          error lines + the path, instead of all of it\n"
+          "  PreCompact / PostCompact every block the compaction drops is archived under {}/history/<session>/\n"
+          "  SessionStart (compact)  the model is told the archive exists and how to `kvleak recall` from it\n"
+          "  Takes effect in new sessions. Undo: kvleak hooks --uninstall".format(
+              settings, args.max_chars, cache_root(), cache_root()))
+    return 0
+
+
+def cmd_recall(args) -> int:
+    from .hooks import archived_sessions, recall, resolve_session
+
+    sid = resolve_session(args.session)
+    if not sid:
+        if args.session:
+            print("kvleak: no archived history for a session starting with {!r}".format(args.session), file=sys.stderr)
+        else:
+            print("kvleak: nothing archived yet. Install the hooks (kvleak hooks --install); the first compaction fills the archive.",
+                  file=sys.stderr)
+        return 1
+    if args.list:
+        for p in archived_sessions()[:20]:
+            print("  {}  {}".format(p.name[:8], datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")))
+        return 0
+    print(recall(sid, args.query, args.show, limit=args.limit, context=args.context))
+    return 0
+
+
+def cmd_refine(args) -> int:
+    from .diet import aggregate
+    from .refine import (
+        HEADING,
+        METRIC_LABEL,
+        apply,
+        load_state,
+        metrics,
+        probe,
+        propose,
+        remove,
+        render,
+        save_state,
+    )
+
+    c = fmt.c
+    target = Path(args.file) if args.file else (Path.cwd() / "CLAUDE.md" if args.local else _claude_dir() / "CLAUDE.md")
+    if args.remove:
+        print("Removed the kvleak block from {}".format(target) if remove(target) else "No kvleak block in {}".format(target))
+        return 0
+    miss = _profile(args).miss_rate
+    if args.probe:
+        state = load_state()
+        if not state:
+            print("kvleak: no rules applied yet (kvleak refine --apply)", file=sys.stderr)
+            return 1
+        after_t = load_all(_default_paths(args), args.format, state["applied_at"], args.project)
+        agg = aggregate(after_t, miss)
+        if agg.sessions < 3:
+            print("kvleak: only {} interactive session(s) since the rules were applied on {}; probe needs 3.".format(
+                agg.sessions, datetime.fromtimestamp(state["applied_at"]).strftime("%Y-%m-%d")))
+            return 0
+        print(c("\n  Rules applied {} · {} sessions before ({}) vs {} sessions since".format(
+            datetime.fromtimestamp(state["applied_at"]).strftime("%Y-%m-%d"), state.get("baseline_sessions", "?"),
+            state.get("window", "?"), agg.sessions), "bold"))
+        rows = [["rule", "metric", "before", "after", "change", "verdict"]]
+        for ct in probe(state, metrics(agg)):
+            rows.append([ct.rule, METRIC_LABEL.get(ct.metric, ct.metric), _metric_fmt(ct.metric, ct.before),
+                         _metric_fmt(ct.metric, ct.after), "{:+.0%}".format(ct.change),
+                         c(ct.verdict, "green" if ct.verdict.startswith("kept") else "yellow" if "worse" in ct.verdict else "grey")])
+        print(fmt.table(rows, "llrrrl"))
+        print(c("  Behavioural contrast only: it shows whether the numbers moved, not that the rules caused it.", "grey"))
+        return 0
+    since = args.since if args.since is not None else time.time() - 30 * 86400
+    transcripts = load_all(_default_paths(args), args.format, since, args.project)
+    agg = aggregate(transcripts, miss)
+    if not agg.kinds:
+        print("kvleak: no interactive sessions in that window", file=sys.stderr)
+        return 1
+    rules = propose(agg, _bash_cap_saving(agg, 8_000), args.min_usd)
+    window = _window_label(since)
+    if not rules:
+        print("No rule clears ${:.0f} of evidence in the last {}. Nothing to add.".format(args.min_usd, window))
+        return 0
+    block = render(rules, window)
+    print(c("\n  {} rules with evidence from {} sessions · {}".format(len(rules), agg.sessions, window), "bold"))
+    for r in rules:
+        print("  {} {}  {}".format(c("•", "green"), c(r.id, "bold"), c("~" + fmt.usd(r.saving_usd) + " / " + window, "green")))
+        print("    {}".format(r.text))
+        print(c("    evidence: {}".format(r.evidence), "grey"))
+    if not args.apply:
+        print(c("\n  Write them under '{}' in {}: kvleak refine --apply   (project file: --local)".format(HEADING, target), "grey"))
+        return 0
+    apply(target, block)
+    base = metrics(agg)
+    save_state(rules, base, target, window)
+    st = load_state() or {}
+    st["baseline_sessions"] = agg.sessions
+    from .refine import state_path
+
+    state_path().write_text(json.dumps(st, indent=1), encoding="utf-8")
+    print("\nWrote {} rules to {} (backup: {}.kvleak.bak). They cost about {} tokens per call to carry.\n"
+          "  In a week: kvleak refine --probe   · undo: kvleak refine --remove".format(
+              len(rules), target, target, fmt.tok(len(block) / 4)))
+    return 0
+
+
+def _metric_fmt(metric: str, v: float) -> str:
+    if metric.endswith("share"):
+        return fmt.pct(v)
+    if metric.endswith("usd_per_call"):
+        return fmt.usd(v)
+    return "{:,.1f}".format(v)
+
+
+def _claude_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+
+
 def cmd_statusline(args) -> int:
     if not args.install:
         from .statusline import main as sl_main
@@ -666,13 +846,7 @@ def cmd_statusline(args) -> int:
     data = _read_settings()
     if data is None:
         return 1
-    exe = shutil.which("kvleak")
-    if exe:
-        command = "{} statusline".format(exe)
-    elif shutil.which("uvx"):  # running from an ephemeral `uvx kvleak` env; don't pin its path
-        command = "uvx kvleak statusline"
-    else:
-        command = "{} -m kvleak statusline".format(sys.executable)
+    command = "{} statusline".format(_kvleak_command())
     existing = data.get("statusLine")
     if existing and "kvleak" not in json.dumps(existing) and not args.force:
         print("kvleak: you already have a statusLine:\n  {}\nRe-run with --force to replace it, or add\n  {}\n"
@@ -755,6 +929,41 @@ def build_parser() -> argparse.ArgumentParser:
     di.add_argument("--all", action="store_true", help="aggregate every interactive session in the window (30d default)")
     di.add_argument("--top", type=int, default=8, help="single items to list (default 8)")
     di.set_defaults(func=cmd_diet)
+
+    hk = sub.add_parser("hooks", help="install Claude Code hooks: condense long shell output, archive what compaction drops")
+    hk.add_argument("--install", action="store_true", help="add the hooks to ~/.claude/settings.json")
+    hk.add_argument("--uninstall", action="store_true", help="remove them again")
+    hk.add_argument("--project", action="store_true", help="use ./.claude/settings.json instead")
+    hk.add_argument("--max-chars", type=int, default=8_000, metavar="N",
+                    help="Bash results longer than this are archived and condensed (default 8000)")
+    hk.add_argument("--no-color", action="store_true")
+    hk.set_defaults(func=cmd_hooks)
+
+    h = sub.add_parser("hook", help="hook entry point used by settings.json (reads the hook payload on stdin)")
+    h.add_argument("event", choices=["post-tool", "pre-compact", "post-compact", "session-start"])
+    h.add_argument("--max-chars", type=int, default=8_000)
+    h.set_defaults(func=cmd_hook)
+
+    rc = sub.add_parser("recall", help="search the archived history of a compacted session")
+    rc.add_argument("query", nargs="?", help="regex; without it, the map of archived requests")
+    rc.add_argument("--session", help="session id prefix (default: most recently archived)")
+    rc.add_argument("--show", type=int, metavar="N", help="print record N in full")
+    rc.add_argument("--list", action="store_true", help="archived sessions")
+    rc.add_argument("--limit", type=int, default=40, help="matching records to show (default 40)")
+    rc.add_argument("--context", type=int, default=1, help="lines around each match (default 1)")
+    rc.add_argument("--no-color", action="store_true")
+    rc.set_defaults(func=cmd_recall)
+
+    rf = sub.add_parser("refine", help="evidence-backed context-hygiene rules for CLAUDE.md, from your history (30d)")
+    _add_common(rf)
+    rf.add_argument("--apply", action="store_true", help="write the rules to ~/.claude/CLAUDE.md (backed up)")
+    rf.add_argument("--local", action="store_true", help="write to ./CLAUDE.md instead of ~/.claude/CLAUDE.md")
+    rf.add_argument("--file", help="write to this file instead")
+    rf.add_argument("--remove", action="store_true", help="delete the kvleak block again")
+    rf.add_argument("--probe", action="store_true", help="contrast sessions since --apply with the ones before")
+    rf.add_argument("--min-usd", type=float, default=5.0, metavar="USD",
+                    help="only propose a rule whose evidence is worth at least this much (default 5)")
+    rf.set_defaults(func=cmd_refine)
 
     b = sub.add_parser("breakeven", help="keep-alive vs. rebuild calculator")
     b.add_argument("tokens", type=parse_tokens, help="cached prefix size, e.g. 150k")

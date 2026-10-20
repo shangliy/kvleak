@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0 (2026-10-20)
+
+Three things borrowed from REPL-style harnesses (Prime Agent's "context as a variable" and retrievable history,
+Harness²'s propose/probe/compose loop), done with what Claude Code exposes: hooks and `CLAUDE.md`.
+
+- `kvleak hooks --install`: four Claude Code hooks. `PostToolUse` on Bash archives any result over 8k chars and
+  shows the model head + tail + error lines (with the lines after them) + repeated lines collapsed + the path to
+  the full text. `PreCompact` archives every block the compaction is about to drop; `PostCompact` saves the
+  summary; `SessionStart` after a compaction tells the model the archive exists, maps its requests and gives it the
+  `kvleak recall` command. Hooks never fail loudly (exceptions go to `~/.cache/kvleak/hooks.log`).
+- `kvleak recall "<regex>" [--session ID] [--show N]`: search the archived history; the model runs it too.
+- `kvleak diet` counts **mechanical chains**: 3+ consecutive ls/cat/grep/read steps with no real decision between
+  them, priced as the context re-reads one script would have skipped. On the maintainer's history: 493 chains,
+  2,235 of 9,924 calls, up to $160.
+- `kvleak refine`: evidence-gated context-hygiene rules for `CLAUDE.md` (loops in subagents, batch mechanical steps,
+  scripts in files, shell output to files, Edit not Write, terse in loops), each with its dollar evidence written
+  in. `--apply` writes a removable block and stores a behaviour baseline; `--probe` contrasts the sessions since
+  with it, one metric per rule.
+- `kvleak hooks`/`statusline` share one resolver for how settings.json should invoke kvleak; `--project` installs
+  hooks into `./.claude/settings.json`.
+
 ## 0.5.0 (2026-10-20)
 
 - `kvleak diet` splits the model's own output into **thinking** (exact, from `usage.output_tokens_details`),

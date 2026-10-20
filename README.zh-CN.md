@@ -22,6 +22,8 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 - 6 个 Worker 的 Swarm 模拟：指针交接 + 常驻 Worker + 锁定模型，输入成本 **−86%**
 - 压缩顾问回测：只在上下文超过 200k 时压缩（平均每个会话约 3 次），输入花费 **−58%**；只在超过 400k 时压缩（30 天共 23 次）也有 **−40%**
 - `kvleak tune --apply`：同样的 30 天，四个 Claude Code 自带的设置合计 **−$909（−45%）**
+- 机械链（连续 3 次以上 `ls`/`cat`/`grep`/小读取、中间没有真正的决策）：**493 条，占 9,924 次调用中的 2,235 次**；合成脚本最多 **−$160**
+- `kvleak refine`：5 条写进 CLAUDE.md 的规则，每条都附带证据，合计覆盖 **≈$640 / 30 天** 的可测量浪费
 
 ## 功能
 
@@ -34,6 +36,9 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 | `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
 | `kvleak tune --apply` | 用你的历史回测 Claude Code 自带的缓存设置（自动压缩窗口、缓存 TTL、空闲压缩阈值），把最省钱的值**直接写进 `settings.json`** |
 | `kvleak diet` | 拆开上下文：**到底是什么把它填满的**（工具输出、你贴的文本、模型自己的回复、系统提示词），每一块被携带了多少次、花了多少钱，并点名最贵的单项；`--all` 汇总 30 天 |
+| `kvleak hooks --install` | 装 4 个 Claude Code hook：**长 shell 输出不进上下文**（模型只看到头、尾、报错行和完整输出的路径），**压缩不再丢东西**（被压掉的全部归档，并告诉模型怎么查） |
+| `kvleak recall "<regex>"` | 搜索被压缩掉的历史。模型自己也会用它 |
+| `kvleak refine --apply` | 把**有证据的上下文卫生规则**写进 `CLAUDE.md`，每条规则都要在你自己的历史上值一个金额才会出现；之后 `--probe` 对比前后，告诉你哪条规则真的改变了行为 |
 | `kvleak breakeven 150k --idle 20m` | 保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
 | `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
 | `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
@@ -101,6 +106,59 @@ $ kvleak diet --all
 另外，当前模型会把**思考一直留在上下文里直到压缩**，所以它占了重读量的 14%；但在这份历史上把 `/effort` 从 high 降到 medium 只能省 $3，
 真正的杠杆是压缩而不是 effort。最大的单项数字是**长回合**：114 个超过 20 次调用的工具循环，把它们开始时的历史重读了 4,707 次。
 把这类循环放进新的子 Agent 里跑，$319 就省下来了。
+
+`diet` 还会数**机械链**：连续 3 次以上的调用，每次只做一个 `ls`、`cat`、`grep`、`find` 或小段读取，中间没有真正的决策
+（思考不到 200 token、回复不到 300 字符）。每一步都把整个上下文重读一遍，而一段脚本只读一次。同一份历史上：
+493 条链，2,235 / 9,924 次调用，合成脚本最多省 $160。**账单是按调用次数算的，不是按 token。**
+
+## 从 REPL 型 harness 借来的三件事：hooks、recall、refine
+
+给模型一个常驻 REPL 而不是工具列表的 harness（[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)）把工具输出
+放在**变量**里：模型只打印它需要的部分，其余不进 prompt，被压缩掉的历史也仍然可以取回。Harness 自改进框架
+（[Harness²](https://github.com/google-research/harness2)）修改模型周围的文件，并且只保留有证据支持的修改。
+Claude Code 的工具模型改不了，但它的 hooks 和 `CLAUDE.md` 足够拿到这两者的大部分好处。
+
+```bash
+kvleak hooks --install      # 往 ~/.claude/settings.json 写 4 个 hook（撤销：--uninstall）
+```
+
+| hook | 做什么 |
+|---|---|
+| `PostToolUse`（Bash） | 超过 8,000 字符（`--max-chars`）的结果写进 `~/.cache/kvleak/outputs/<session>/<id>.txt`。模型看到的是开头、结尾、所有像报错的行（连同后两行）、重复行折叠成 `(×N)`，以及完整输出的路径。什么都没丢，只隔一个 `grep` |
+| `PreCompact` | 摘要替换历史之前，把记录里每一个工具结果、消息、回复追加到 `~/.cache/kvleak/history/<session>/history.jsonl` |
+| `PostCompact` | 摘要本身也存在旁边，方便看它保留了什么 |
+| `SessionStart`（compact） | 告诉模型归档存在，给它一行一个请求的地图和 `kvleak recall` 命令。压缩后它做的第一件事不再是"重新跑一遍测试看看哪里失败" |
+
+```text
+$ kvleak recall "AssertionError" --session 7ff95ce0
+#312 result Bash pytest -q tests/test_policy.py
+    > FAILED tests/test_policy.py::test_window_sweep - AssertionError: assert 98 == 96
+$ kvleak recall --show 312 | head -40
+```
+
+`kvleak refine` 是"持续 harness"的那一半。它拿 `diet` 和 `tune` 测出来的数字，给 `~/.claude/CLAUDE.md`
+（`--local` 则是 `./CLAUDE.md`）生成一小段规则。一条规则只有在它的证据在时间窗内值 `--min-usd`（默认 $5）以上时才出现，
+而且证据会写进规则里，让模型知道为什么：
+
+```text
+$ kvleak refine
+
+  5 rules with evidence from 33 sessions · 30d
+  • loops-in-subagents  ~$320 / 30d
+    Long loops: when a task will take more than ~20 tool calls (...), run it in a subagent that reports back a few lines
+    evidence: 116 loops of 20+ calls re-read 4,754 calls of history for $353; in subagents that would have been $320 less
+  • batch-steps  ~$160 / 30d
+    Mechanical steps: combine sequences of `ls`, `cat`, `grep`, `find` and small reads into one command or one script
+    evidence: 493 chains of 3+ mechanical calls (2,235 calls); as single scripts they would have saved up to $160
+  • scripts-in-files  ~$103 / 30d
+  • shell-output      ~$32 / 30d
+  • edit-not-write    ~$24 / 30d
+```
+
+`--apply` 写入这段（有备份，`--remove` 可删；每次调用约多携带 150 token），并记下当天的行为指标。
+一周后 `kvleak refine --probe` 把之后的会话和之前的做对比，每条规则对应一个指标（每次 Bash 结果的 token 数、
+机械链里的调用占比、20+ 次调用循环里的调用占比……），告诉你哪条规则的数字动了、哪条没动。这就是 Harness² 的
+probe 步骤，只不过跑在你的真实会话上而不是 benchmark 上；它说明行为有没有变，不证明是规则导致的。
 
 ## 未命中原因分类
 
