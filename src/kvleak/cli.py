@@ -29,15 +29,15 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import __version__, fmt
 from .analyze import CAUSES, analyze, classify, step_cost
 from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
-from .sources import Transcript, default_claude_root, discover, load
+from .sources import Transcript, default_claude_root, discover, load, load_many
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "breakeven",
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "whatif", "breakeven",
                "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
@@ -67,15 +67,16 @@ def parse_tokens(value: str) -> int:
     return int(float(m.group(1)) * {"": 1, "k": 1e3, "m": 1e6}[m.group(2).lower()])
 
 
-def _load_one(args):
+def _load_one(args) -> List[Transcript]:
     path, fmt_, since = args
     try:
-        t = load(path, fmt_)
+        found = load_many(path, fmt_)
     except OSError:
-        return None
+        return []
     if since is not None:
-        t.steps = [s for s in t.steps if s.ts is None or s.ts.timestamp() >= since]
-    return t
+        for t in found:
+            t.steps = [s for s in t.steps if s.ts is None or s.ts.timestamp() >= since]
+    return found
 
 
 def load_all(paths: List[str], fmt_: str, since: Optional[float], project: Optional[str]) -> List[Transcript]:
@@ -88,19 +89,24 @@ def load_all(paths: List[str], fmt_: str, since: Optional[float], project: Optio
             results = list(ex.map(_load_one, jobs, chunksize=32))
     else:
         results = [_load_one(j) for j in jobs]
-    return [t for t in results if t and t.steps]
+    out = [t for found in results for t in found if t.steps]
+    if project:
+        out = [t for t in out if project.lower() in t.path.lower() or project.lower() in t.project.lower()]
+    return out
 
 
 def _default_paths(args) -> List[str]:
+    from .readers import default_roots
+
     if args.path:
         return args.path
-    root = default_claude_root()
-    if not root.exists():
+    roots = default_roots()
+    if not roots:
         sys.exit(
-            "kvleak: no Claude Code transcripts at {}.\n"
-            "Point me at your logs with --path <dir-or-file> (any JSONL with token usage works).".format(root)
+            "kvleak: no session stores found (looked for Claude Code at {}, Codex CLI, Gemini CLI and OpenCode).\n"
+            "Point me at your logs with --path <dir-or-file> (any JSONL with token usage works).".format(default_claude_root())
         )
-    return [str(root)]
+    return roots
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -381,7 +387,8 @@ def _write_settings(data: dict, project: bool = False) -> Path:
     return settings
 
 
-def cmd_tune(args) -> int:
+def _tune_plan(args, transcripts: List[Transcript], since: float):
+    """Replay every Claude Code cache setting on these transcripts. Returns (plan, table rows, main sessions, groups, report)."""
     from .advisor import Profile
     from .policy import (
         IDLE_COMPACT_DEFAULT_MIN,
@@ -395,13 +402,7 @@ def cmd_tune(args) -> int:
     )
 
     c = fmt.c
-    if args.reset:
-        return _reset_tune()
-    since = args.since if args.since is not None else time.time() - 30 * 86400
-    transcripts = load_all(_default_paths(args), args.format, since, args.project)
-    if not transcripts:
-        print("kvleak: no transcripts in that window", file=sys.stderr)
-        return 1
+    transcripts = [t for t in transcripts if t.source == "claude"]  # these are Claude Code's settings
     report = analyze(transcripts, args.min_miss, 0)
     groups = split(transcripts)
     main_t = groups["main"]
@@ -521,6 +522,19 @@ def cmd_tune(args) -> int:
         why += " · trim the prefix: omitClaudeMd: true, a `tools:` allowlist, or context: fork"
         row("subagent cold starts", "{} × {} avg".format(sub.count, fmt.tok(sub.avg)), "staggered", sub.stagger_saving_usd, why)
 
+    return plan, rows, main_t, groups, report
+
+
+def cmd_tune(args) -> int:
+    c = fmt.c
+    if args.reset:
+        return _reset_tune()
+    since = args.since if args.since is not None else time.time() - 30 * 86400
+    transcripts = load_all(_default_paths(args), args.format, since, args.project)
+    if not transcripts:
+        print("kvleak: no transcripts in that window", file=sys.stderr)
+        return 1
+    plan, rows, main_t, groups, report = _tune_plan(args, transcripts, since)
     total = sum(r["saving_usd"] for r in plan["rows"] if r["applies"])
     manual = sum(r["saving_usd"] for r in plan["rows"] if not r["applies"])
     if args.json:
@@ -541,6 +555,70 @@ def cmd_tune(args) -> int:
               + c("  (undo: kvleak tune --reset)", "grey"))
     else:
         print("  Your settings already match your history. Nothing to change.")
+    return 0
+
+
+def cmd_whatif(args) -> int:
+    """Replay other tools' promises on your own bill."""
+    from .diet import INPUT_SUFFIX, PLAIN_KINDS, SYSTEM_KIND, TEXT_KIND, THINKING_KIND, aggregate
+    from .policy import split
+
+    c = fmt.c
+    since = args.since if args.since is not None else time.time() - 30 * 86400
+    transcripts = load_all(_default_paths(args), args.format, since, args.project)
+    if not transcripts:
+        print("kvleak: no transcripts in that window", file=sys.stderr)
+        return 1
+    report = analyze(transcripts, args.min_miss, 0)
+    if not report.priced or not report.cost_usd:
+        print("kvleak: no priced calls in that window (add a pricing file for your models)", file=sys.stderr)
+        return 1
+    bill = report.cost_usd + report.output_usd
+    uncached_usd = report.cost_usd - report.read_usd - report.write_usd
+    window = _window_label(since)
+    print(c("\n  What if · {} model calls · {} over the last {}".format(f"{report.steps:,}", fmt.usd(bill), window), "bold"))
+    print("  Bill = {} uncached input + {} cache writes + {} cache reads + {} output".format(
+        fmt.usd(uncached_usd), fmt.usd(report.write_usd), fmt.usd(report.read_usd), fmt.usd(report.output_usd)))
+    print(c("  Each lever below is what its tool advertises, applied to the part of this bill it can touch. Upper bounds: "
+            "they assume the model never fetches the trimmed text again.", "grey"))
+    claude_t = [t for t in transcripts if t.source == "claude"]
+    main_t = split(claude_t)["main"]
+    agg = aggregate(main_t, _profile(args).miss_rate) if main_t else None
+    kinds = agg.kinds if agg else {}
+    model = max(report.model_mix, key=report.model_mix.get) if report.model_mix else None
+    price = price_for(model)
+
+    def kind_usd(pred) -> float:
+        return sum(v["carry_usd"] + v["entry_usd"] for k, v in kinds.items() if pred(k))
+
+    rows: List[Tuple[str, str, float]] = []
+    rows.append(("Shell output −60%", "rtk's low end (\"60–90%\")", 0.6 * kind_usd(lambda k: k == "Bash")))
+    rows.append(("All tool results −40%", "AgentDiet, arXiv 2509.23586",
+                 0.4 * kind_usd(lambda k: k not in PLAIN_KINDS and not k.endswith(INPUT_SUFFIX))))
+    rows.append(("Startup context −50%", "claude-token-optimizer", 0.5 * kind_usd(lambda k: k == SYSTEM_KIND)))
+    text = kinds.get(TEXT_KIND, {})
+    text_out = price.usd(text.get("tokens", 0) * price.output_mult) or 0.0
+    rows.append(("Replies half as long", "caveman", 0.5 * (kind_usd(lambda k: k == TEXT_KIND) + text_out)))
+    think_out = (price.usd(agg.thinking_tokens * price.output_mult) or 0.0) if agg else 0.0
+    rows.append(("Thinking −25%", "effort high → medium", 0.25 * (kind_usd(lambda k: k == THINKING_KIND) + think_out)))
+    tune_total = 0.0
+    if main_t:
+        plan, _, _, _, _ = _tune_plan(args, claude_t, since)
+        tune_total = sum(r["saving_usd"] for r in plan["rows"] if r["applies"])
+        rows.append(("kvleak tune --apply", "compaction window, TTLs, idle compaction, Bash cap", tune_total))
+    table = [["if you…", "who promises it", "bill saving", "share of bill"]]
+    for name, who, saving in sorted(rows, key=lambda r: -r[2]):
+        table.append([name, who, c("−" + fmt.usd(saving), "green" if saving >= 1 else "grey"), fmt.pct(saving / bill)])
+    print()
+    print(fmt.table(table, "lllr"))
+    print()
+    print(c("  Tool-output compressors only shrink what the context carries, and carrying is paid at the cache-read price. "
+            "On 2,848 billed Claude Code runs a 38% cut in tool output raised cost 6.8% (arXiv 2607.12161); "
+            "a replay over 614M tokens put rtk at 0.5% of the bill.\n"
+            "  Compaction changes how much is carried at all, which is why kvleak tune's levers are larger.", "grey"))
+    if not main_t and claude_t == []:
+        print(c("  No Claude Code sessions in the window: the context levers need them; the bill above is from "
+                "{}.".format(", ".join(sorted({t.source for t in transcripts}))), "grey"))
     return 0
 
 
@@ -1029,6 +1107,11 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--min-usd", type=float, default=5.0, metavar="USD",
                     help="only propose a rule whose evidence is worth at least this much (default 5)")
     rf.set_defaults(func=cmd_refine)
+
+    wi = sub.add_parser("whatif", help="replay other tools' promises (rtk, caveman, …) on your own bill")
+    _add_common(wi)
+    wi.add_argument("--min-window", type=parse_tokens, default=150_000, metavar="TOKENS", help=argparse.SUPPRESS)
+    wi.set_defaults(func=cmd_whatif)
 
     ka = sub.add_parser("keepalive", help="how many keep-alive pings your own idle pattern justifies")
     _add_common(ka)

@@ -74,6 +74,12 @@ BUILTIN: Dict[str, Price] = {
         Price("claude-haiku-5-5", 0.10),
         Price("claude-haiku-4-5", 1.00),
         Price("claude-haiku", 1.00),
+        # OpenAI (Codex CLI): cached input 10% of input, cache writes 1.25× on GPT-5.6 and later, none before.
+        Price("gpt-6-astra", 10.00, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=5.0),
+        Price("gpt-5.6-terra", 2.00, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=6.0),
+        Price("gpt-5.6-luna", 0.20, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=6.0),
+        Price("gpt-5.6-sol", 5.00, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=6.0),
+        Price("gpt-5", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0),
     ]
 }
 

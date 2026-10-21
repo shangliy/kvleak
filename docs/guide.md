@@ -341,10 +341,44 @@ $ kvleak pointer /tmp/build.log --status FAIL --note "3 tests failing in //pkg"
 | Source | How |
 |---|---|
 | **Claude Code** (incl. subagents) | automatic: `~/.claude/projects`, respects `$CLAUDE_CONFIG_DIR` |
+| **Codex CLI** | automatic: `$CODEX_HOME/sessions/**/rollout-*.jsonl` and `archived_sessions/`. Per-response usage from `token_count` events (`last_token_usage`, or the delta of `total_token_usage`); OpenAI counts cached and cache-written tokens inside `input_tokens`, kvleak splits them out. |
+| **Gemini CLI** | automatic: `~/.gemini/tmp/<project>/chats/session-*.json` (≤0.38) or `.jsonl` (≥0.39); messages of `type: gemini` with `tokens: {input, cached, output, thoughts}`. |
+| **OpenCode** | automatic: `$XDG_DATA_HOME/opencode/opencode*.db` (or `$OPENCODE_DATA_DIR`); 1.x `message.data` and 2.x `session_message` rows with `tokens: {input, output, reasoning, cache: {read, write}}`. Child sessions count as subagents. |
 | **Any JSONL with usage counters** | `--path <dir-or-file>`. Auto-detects Anthropic (`cache_read_input_tokens`), OpenAI (`prompt_tokens_details.cached_tokens`), Gemini (`cachedContentTokenCount`) and flat agent-framework keys (`input_tokens`, `cache_read_tokens`, `created_at`). |
 
-Prices for current Claude models are built in (`kvleak models`). For other
-providers, add a pricing file; see [`examples/pricing.json`](../examples/pricing.json).
+`audit`, `session`, `advise`, `keepalive` and `whatif` work on all of them.
+`diet`, `tune`, `hooks`, `recall` and `refine` need the tool results and the
+settings of Claude Code and read only its transcripts.
+
+Prices for current Claude and OpenAI models are built in (`kvleak models`).
+For other providers, add a pricing file; see [`examples/pricing.json`](../examples/pricing.json).
+
+## What if: other tools' promises on your bill
+
+```text
+$ kvleak whatif
+
+  What if · 58,199 model calls · $3,053 over the last 30d
+  Bill = $80.38 uncached input + $1,337 cache writes + $1,183 cache reads + $452.12 output
+
+  if you…                who promises it                                     bill saving  share of bill
+  kvleak tune --apply    compaction window, TTLs, idle compaction, Bash cap  −$786.56             25.8%
+  Shell output −60%      rtk's low end ("60–90%")                            −$222.00              7.3%
+  All tool results −40%  AgentDiet, arXiv 2509.23586                         −$183.98              6.0%
+  Thinking −25%          effort high → medium                                −$59.22               1.9%
+  Startup context −50%   claude-token-optimizer                              −$43.19               1.4%
+  Replies half as long   caveman                                             −$32.74               1.1%
+```
+
+Each row applies a tool's advertised reduction to the part of the bill it can
+touch: for a context block, its entry cost (a cache write) plus what carrying
+it on every later call cost (`diet`'s carried cost); for replies, their output
+tokens too. They are upper bounds because they assume the model never fetches
+the trimmed text again, which the measured studies say it does: on 2,848
+billed Claude Code runs a 38% cut in tool output raised cost 6.8%
+([Token Reduction Is Not Cost Reduction](https://arxiv.org/abs/2607.12161)),
+and a replay over 614M tokens of real sessions put rtk at 0.5% of the bill.
+The `kvleak tune --apply` row is the same total `kvleak tune` prints.
 Models without a price still get full token-level analysis.
 
 Want your agent harness supported natively? A reader is one small function

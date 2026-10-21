@@ -7,6 +7,8 @@ from typing import List
 from .analyze import CAUSES, Report, recommendations
 from .fmt import bar, c, duration, pct, table, tok, usd
 
+SOURCE_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Gemini CLI", "opencode": "OpenCode", "generic": "other"}
+
 CAUSE_COLOR = {
     "ttl_expiry": "red",
     "prefix_bust": "magenta",
@@ -32,6 +34,8 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
     who = " {} sessions + {} subagents".format(r.sessions - r.subagents - r.oneshot, r.subagents)
     if r.oneshot:
         who += " + {} one-shot runs".format(f"{r.oneshot:,}")
+    if len(r.sources) > 1:
+        who += " ({})".format(", ".join("{} {}".format(SOURCE_LABEL.get(s, s), n) for s, n in sorted(r.sources.items(), key=lambda kv: -kv[1])))
     out.append(c("{} · {} model calls · {} min miss size".format(who, f"{r.steps:,}", tok(r.min_miss_tokens)), "grey"))
     out.append("")
 
@@ -48,10 +52,21 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
             c("caching already saved you {}".format(usd(saved) if priced else tok(saved) + " tok"), "grey"),
         )
     )
+    if priced and r.output_usd:
+        bill = r.cost_usd + r.output_usd
+        out.append(
+            "  Output spend     {}   {}".format(
+                c(usd(r.output_usd).rjust(8), "bold"),
+                c("replies + thinking at the output price · whole bill {}: {} cache writes, {} cache reads, {} output".format(
+                    usd(bill), pct(r.write_usd / bill), pct(r.read_usd / bill), pct(r.output_usd / bill)), "grey"),
+            )
+        )
     out.append(
         "  Leaked to misses {}   {}".format(
             c(_money_or_tokens(r.leak, r.leak_usd, priced).rjust(8), "bold", "red"),
-            c("{} of input spend went to cache rebuilds and cold starts".format(pct(leak_share)), "grey"),
+            c("{} of input spend went to cache rebuilds and cold starts".format(pct(leak_share))
+              + (" · {} of the whole bill".format(pct(r.leak_usd / (r.cost_usd + r.output_usd)))
+                 if priced and r.output_usd else ""), "grey"),
         )
     )
     if r.keepalive_saving:

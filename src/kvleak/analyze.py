@@ -83,10 +83,14 @@ class Report:
     output: int = 0
     cost: float = 0.0  # base-equivalent tokens actually billed for input
     cost_usd: float = 0.0
+    output_usd: float = 0.0  # replies + thinking at the output price; input + output is the whole bill
+    read_usd: float = 0.0  # the cache-read part of cost_usd
+    write_usd: float = 0.0  # the cache-write part of cost_usd (uncached input is the rest)
     no_cache_cost: float = 0.0  # what input would have cost with no caching at all
     no_cache_cost_usd: float = 0.0
     unpriced_steps: int = 0
     model_mix: Dict[str, int] = field(default_factory=dict)
+    sources: Dict[str, int] = field(default_factory=dict)  # which tool wrote the sessions: claude, codex, …
     buckets: Dict[str, Dict[str, float]] = field(default_factory=dict)
     keepalive_saving: float = 0.0
     keepalive_saving_usd: float = 0.0
@@ -233,6 +237,8 @@ def analyze(
         if not t.steps:
             continue
         r.sessions += 1
+        if not t.is_subagent and len(t.steps) >= 5:
+            r.sources[t.source] = r.sources.get(t.source, 0) + 1
         r.subagents += int(t.is_subagent)
         r.oneshot += int(not t.is_subagent and len(t.steps) < 5)
         s = SessionStats(t.session_id, t.project, t.path, t.is_subagent, [])
@@ -252,6 +258,9 @@ def analyze(
                 r.unpriced_steps += 1
             else:
                 r.cost_usd += price.usd(cost)
+                r.output_usd += price.usd(step.output * price.output_mult)
+                r.read_usd += price.usd(step.read * price.read_mult)
+                r.write_usd += price.usd(step.write_5m * price.write_5m_mult + step.write_1h * price.write_1h_mult)
                 r.no_cache_cost_usd += price.usd(step.prompt)
                 s.cost_usd += price.usd(cost)
             if step.model:

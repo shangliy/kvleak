@@ -295,3 +295,32 @@ Method: [how-it-works.md §5a](how-it-works.md#5a-learned-keep-alive-budget-kvle
 Caveats: list prices (quota on a subscription); the return rates are one
 person's habits; a pause inside a session includes long tool runs, which a
 keep-alive bridges just as well.
+
+## 10. What other tools' promises are worth on this bill (`kvleak whatif`)
+
+Same machine, last 30 days as of 2026-10-21, now including 20 Codex CLI
+sessions next to the 81 Claude Code ones (58,199 calls, $3,053 at list price:
+$80 uncached input, $1,337 cache writes, $1,183 cache reads, $452 output).
+
+| lever | who promises it | upper-bound saving | share of bill |
+|---|---|---:|---:|
+| `kvleak tune --apply` | compaction window, TTLs, idle compaction, Bash cap | **$787** | 25.8% |
+| shell output −60% | rtk's low end ("60–90%") | $222 | 7.3% |
+| all tool results −40% | AgentDiet (arXiv 2509.23586) | $184 | 6.0% |
+| thinking −25% | effort high → medium | $59 | 1.9% |
+| startup context −50% | claude-token-optimizer | $43 | 1.4% |
+| replies half as long | caveman | $33 | 1.1% |
+
+The compressor rows assume the model never re-fetches what was trimmed. The
+paired measurement that did not assume that (2,848 billed Claude Code runs,
+[arXiv 2607.12161](https://arxiv.org/abs/2607.12161)) found a 38% tool-output
+cut *raised* cost 6.8%, and an independent replay over 614M tokens put rtk at
+0.5% of the bill, so the real figures for those rows are lower still.
+Compaction is different in kind: it changes how much is carried at all, and
+on a history where 44% of the bill is cache writes it is the only lever above
+a tenth of the bill.
+
+Codex CLI, same window: 20 sessions, 21,098 calls, 98.6% hit rate, 5.5% of
+input spend leaked (vs. 24% for Claude Code on the same machine). Part of that
+is structural: OpenAI charges no cache-write premium, so an expiry costs
+0.9× the prefix instead of 1.95×.

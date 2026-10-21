@@ -53,6 +53,7 @@ class Block:
     carried: int = 0  # calls that re-read it
     carry_cost: float = 0.0  # base-equivalent tokens
     carry_usd: float = 0.0
+    entry_usd: float = 0.0  # what it cost the call that first sent it (a cache write)
     is_image: bool = False
     exact: bool = False  # est comes from usage, not from text length
 
@@ -113,10 +114,11 @@ class Diet:
     def by_kind(self) -> Dict[str, dict]:
         out: Dict[str, dict] = {}
         for b in self.blocks:
-            d = out.setdefault(b.kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "images": 0, "max": 0.0})
+            d = out.setdefault(b.kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "entry_usd": 0.0, "images": 0, "max": 0.0})
             d["count"] += 1
             d["tokens"] += b.tokens
             d["carry_usd"] += b.carry_usd
+            d["entry_usd"] += b.entry_usd
             d["images"] += int(b.is_image)
             d["max"] = max(d["max"], b.tokens)
         return dict(sorted(out.items(), key=lambda kv: -kv[1]["carry_usd"]))
@@ -303,6 +305,7 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
         b.carried = max(end - b.call - 1, 0)
         b.carry_cost = b.tokens * b.carried * r_eff
         b.carry_usd = price.usd(b.carry_cost) or 0.0
+        b.entry_usd = price.usd(b.tokens * price.write_1h_mult) or 0.0
     for tn in turns:
         tn.history_usd = price.usd(tn.calls * tn.context * r_eff) or 0.0
         tn.subagent_saving_usd = price.usd(tn.calls * max(tn.context - SUBAGENT_START, 0) * r_eff) or 0.0 if tn.calls >= LONG_TURN else 0.0
@@ -361,7 +364,7 @@ def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Agg
     """Per-kind totals, the costliest single blocks and the turn structure across many sessions."""
     agg = Aggregate({}, [])
     for t in transcripts:
-        if t.is_subagent or len(t.steps) < 5:
+        if t.is_subagent or len(t.steps) < 5 or t.source != "claude":
             continue
         d = read_diet(t.path, miss_rate=miss_rate)
         agg.sessions += 1
@@ -369,8 +372,8 @@ def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Agg
         agg.output_tokens += d.output_tokens
         agg.thinking_tokens += d.thinking_tokens
         for kind, v in d.by_kind().items():
-            a = agg.kinds.setdefault(kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "images": 0, "max": 0.0})
-            for k in ("count", "tokens", "carry_usd", "images"):
+            a = agg.kinds.setdefault(kind, {"count": 0, "tokens": 0.0, "carry_usd": 0.0, "entry_usd": 0.0, "images": 0, "max": 0.0})
+            for k in ("count", "tokens", "carry_usd", "entry_usd", "images"):
                 a[k] += v[k]
             a["max"] = max(a["max"], v["max"])
         agg.bash_blocks.extend((d.session_id, b) for b in d.blocks if b.kind == "Bash")

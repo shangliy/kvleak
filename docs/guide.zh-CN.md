@@ -170,3 +170,19 @@ probe 步骤，只不过跑在你的真实会话上而不是 benchmark 上；它
 [多 Agent 缓存手册（英文）](playbook.md) 介绍六层优化：单 Worker 锁定模型并用指针交接、「脚本 → 小模型 → 大模型」算力漏斗、常驻 Worker 与 TTL 窗口批处理、公共看板瘦身契约（15 行以内）、确定性前缀、按水位线主动压缩。手册里附有一段可以直接粘贴进 Swarm 指令的契约。
 
 MIT 协议，欢迎贡献！
+
+## 支持的会话文件
+
+| 来源 | 方式 |
+|---|---|
+| **Claude Code**（含子 Agent） | 自动：`~/.claude/projects`，尊重 `$CLAUDE_CONFIG_DIR` |
+| **Codex CLI** | 自动：`$CODEX_HOME/sessions/**/rollout-*.jsonl` 和 `archived_sessions/`。按 `token_count` 事件取每次响应的用量；OpenAI 把缓存命中和缓存写入都算在 `input_tokens` 里，kvleak 会拆开 |
+| **Gemini CLI** | 自动：`~/.gemini/tmp/<project>/chats/session-*.json`（≤0.38）或 `.jsonl`（≥0.39） |
+| **OpenCode** | 自动：`$XDG_DATA_HOME/opencode/opencode*.db`（或 `$OPENCODE_DATA_DIR`），1.x 和 2.x 两种表结构；子会话算子 Agent |
+| **任何带 usage 字段的 JSONL** | `--path <目录或文件>`，自动识别 Anthropic / OpenAI / Gemini / 扁平 agent 框架字段 |
+
+`audit`、`session`、`advise`、`keepalive`、`whatif` 对以上全部有效；`diet`、`tune`、`hooks`、`recall`、`refine` 需要工具输出本身和 Claude Code 的设置，只读 Claude Code。
+
+## whatif：把别人宣传的数字放到你的账单上
+
+`kvleak whatif` 把每个工具宣传的削减比例作用到账单里它能碰到的那部分：上下文块是"进入成本（一次 cache 写入）+ 之后每次调用携带它的成本"，回复还要加上输出 token。结果是上限，因为它假设模型不会再去取被删掉的内容，而实测恰恰相反：2,848 次计费的 Claude Code 运行里工具输出砍 38%，账单 +6.8%（[arXiv 2607.12161](https://arxiv.org/abs/2607.12161)）；614M token 的真实回放里 rtk 只占账单的 0.5%。`kvleak tune --apply` 那一行就是 `kvleak tune` 打印的总数。输出示例见 [README](../README.zh-CN.md)。

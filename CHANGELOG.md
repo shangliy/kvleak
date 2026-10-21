@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 (2026-10-21)
+
+- Reads **Codex CLI** (`~/.codex/sessions`), **Gemini CLI** (`~/.gemini/tmp/*/chats`) and **OpenCode**
+  (`opencode.db`, 1.x and 2.x schemas) session stores automatically, next to Claude Code. `audit`, `session`,
+  `advise`, `keepalive` and `whatif` work across all of them; the audit header says which tools the sessions came
+  from. OpenAI prices (GPT-5, GPT-5.6 Terra/Luna/Sol, GPT-6 Astra) are built in.
+- `kvleak whatif`: replays what other tools advertise (rtk's shell-output cut, AgentDiet's tool-result cut,
+  startup trimming, shorter replies, less thinking) on your own bill as upper bounds, next to `kvleak tune`'s
+  total. On the maintainer's 30 days: tune $787 (25.8% of the bill), the best compressor $222 (7.3%).
+- The audit shows the **whole bill**: output spend, and the split between uncached input, cache writes, cache
+  reads and output (44% / 39% / 15% here). Leak is also given as a share of the whole bill.
+
 ## 0.7.0 (2026-10-20)
 
 - `kvleak keepalive`: a keep-alive budget learned from your own pauses. For every pause that outlived the TTL

@@ -12,26 +12,26 @@
 uvx kvleak            # or: pipx run kvleak  ·  pip install kvleak
 ```
 
-No API key, no config, no network calls, no dependencies. It reads the
-transcripts Claude Code already keeps in `~/.claude/projects` and is done in
-seconds. On a subscription the dollars are list-price equivalents; the
-percentages are your rate-limit headroom.
+No API key, no config, no network calls, no dependencies. It reads the session
+files **Claude Code, Codex CLI, Gemini CLI and OpenCode** already keep on disk
+and is done in seconds. On a subscription the dollars are list-price
+equivalents; the percentages are your rate-limit headroom.
 
 ```text
  kvleak · prompt-cache leak report
- 81 sessions + 276 subagents + 21,977 one-shot runs · 36,915 model calls
+ 101 sessions + 276 subagents + 22,100 one-shot runs (Claude Code 81, Codex CLI 20) · 58,208 model calls
 
-  Cache hit rate    93.1%  ██████████████████████▎
-  Input spend        $2,109   caching already saved you $17,557
-  Leaked to misses  $510.50   24.2% of input spend went to cache rebuilds and cold starts
-  Dead writes       $214.72   write premium on tokens never read back (mostly one-shot `claude -p` runs)
+  Cache hit rate    95.4%  ██████████████████████▉
+  Input spend        $2,602   caching already saved you $21,281
+  Output spend      $452.39   replies + thinking at the output price · whole bill $3,054: 43.8% cache writes, 38.8% cache reads, 14.8% output
+  Leaked to misses  $537.72   20.7% of input spend went to cache rebuilds and cold starts · 17.6% of the whole bill
+  Dead writes       $215.71   write premium on tokens never read back (mostly one-shot `claude -p` runs)
 
  Where the leak comes from
   cause                            misses  uncached     leak  share
-  Idle gap outlived the cache TTL     134     37.9M  $353.52  69.2%  ███████████
-  New session cold start            1,364     36.0M   $79.75  15.6%  ██▍
-  Subagent cold start                 145      4.1M   $29.44   5.8%  ▉
-  Model switched mid-session            8      2.3M   $20.53   4.0%  ▋
+  Idle gap outlived the cache TTL     164     41.3M  $371.92  69.2%  ███████████
+  New session cold start            1,378     36.3M   $81.67  15.2%  ██▍
+  Subagent cold start                 145      4.1M   $29.44   5.5%  ▉
 ```
 
 <sub>The maintainer's last 30 days. Yours will differ; that is the point. Post yours in [#1](https://github.com/shangliy/kvleak/issues/1).</sub>
@@ -43,6 +43,33 @@ A cache hit costs 0.1× the input price (0.025× on Fable 5.1). A rebuild costs
 carry half of all uncached input and the hit rate never moves. kvleak prices
 only the *avoidable* part of each miss: context the cache already held, at
 write price minus read price.
+
+## Why "60–90% fewer tokens" did not shrink your bill
+
+Tool-output compressors shrink what the context *carries*, and carrying is
+paid at the cache-read price, the cheapest line on the bill. On 2,848 billed
+Claude Code runs, a 38% cut in tool output *raised* cost by 6.8%
+([arXiv 2607.12161](https://arxiv.org/abs/2607.12161)). `kvleak whatif`
+replays each tool's promise on your own bill, as an upper bound:
+
+```text
+$ kvleak whatif
+
+  What if · 58,199 model calls · $3,053 over the last 30d
+  Bill = $80.38 uncached input + $1,337 cache writes + $1,183 cache reads + $452.12 output
+
+  if you…                who promises it                                     bill saving  share of bill
+  kvleak tune --apply    compaction window, TTLs, idle compaction, Bash cap  −$786.56             25.8%
+  Shell output −60%      rtk's low end ("60–90%")                            −$222.00              7.3%
+  All tool results −40%  AgentDiet, arXiv 2509.23586                         −$183.98              6.0%
+  Thinking −25%          effort high → medium                                −$59.22               1.9%
+  Startup context −50%   claude-token-optimizer                              −$43.19               1.4%
+  Replies half as long   caveman                                             −$32.74               1.1%
+```
+
+Compaction changes how much is carried at all. That is why the settings
+levers are three times the best compressor, on a history where 44% of the
+bill is cache *writes*.
 
 ## Three commands
 
@@ -91,6 +118,11 @@ Numbers are the maintainer's 30 days; method and reproduction in
 | `kvleak refine --apply` | Evidence-gated context-hygiene rules for `CLAUDE.md`, dollar figure written into each; `--probe` later shows which rules changed behaviour | 5 rules covering ≈$640 / 30 d |
 | `kvleak keepalive` | How many keep-alive pings your own pauses justify before giving up, overall and by time of day; feeds [cache-refresher](https://github.com/olddonkey/cache-refresher) | 5 pings worth $337; lunch pauses return 25%, 6–8 am ones 86% |
 | `kvleak pointer`, `--fail-over`, `--path` | Multi-agent hand-off pointers, a CI gate on leak share, any JSONL with usage counters (Anthropic, OpenAI, Gemini keys) | [playbook](docs/playbook.md) for swarms |
+
+`audit`, `advise`, `keepalive` and `whatif` read Claude Code, Codex CLI
+(`~/.codex/sessions`), Gemini CLI (`~/.gemini/tmp/*/chats`) and OpenCode
+(`opencode.db`) automatically. The context-level commands (`diet`, `tune`,
+`hooks`, `refine`) need the tool results themselves and read Claude Code only.
 
 Full tour with outputs: **[docs/guide.md](docs/guide.md)**. How every number is
 computed: [docs/how-it-works.md](docs/how-it-works.md).

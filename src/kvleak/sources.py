@@ -49,6 +49,7 @@ class Transcript:
     project: str
     is_subagent: bool
     steps: List[Step]
+    source: str = "claude"  # which tool wrote it: claude, codex, gemini, opencode, generic
 
 
 def parse_ts(value) -> Optional[datetime]:
@@ -209,14 +210,16 @@ def read_generic(path: str) -> Transcript:
                 if step:
                     steps.append(step)
     p = Path(path)
-    return Transcript(path, p.stem, p.parent.name, False, steps)
+    return Transcript(path, p.stem, p.parent.name, False, steps, "generic")
 
 
 # ------------------------------------------------------------------------- discovery
 
+SUFFIXES = (".jsonl", ".json", ".db")
+
 
 def discover(paths: Iterable[str], since: Optional[float] = None) -> Iterator[str]:
-    """Yield .jsonl files under the given files/dirs, optionally newer than `since`."""
+    """Yield session files (.jsonl, .json, .db) under the given files/dirs, optionally newer than `since`."""
     for root in paths:
         root = os.path.expanduser(root)
         if os.path.isfile(root):
@@ -224,7 +227,7 @@ def discover(paths: Iterable[str], since: Optional[float] = None) -> Iterator[st
             continue
         for dirpath, _, files in os.walk(root):
             for name in files:
-                if not name.endswith(".jsonl"):
+                if not name.endswith(SUFFIXES):
                     continue
                 full = os.path.join(dirpath, name)
                 if since is not None:
@@ -237,9 +240,20 @@ def discover(paths: Iterable[str], since: Optional[float] = None) -> Iterator[st
 
 
 def detect_format(path: str) -> str:
+    """'claude', 'codex', 'gemini', 'opencode', 'generic', or 'skip' for files that are not sessions."""
+    from .readers import is_codex, is_gemini_path, is_opencode_path
+
+    if path.endswith(".db"):
+        return "opencode" if is_opencode_path(path) else "skip"
+    if is_gemini_path(path):
+        return "gemini"
+    if path.endswith(".json"):
+        return "skip"
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for _, line in zip(range(50), f):
+            for i, line in zip(range(50), f):
+                if i == 0 and is_codex(line):
+                    return "codex"
                 try:
                     obj = json.loads(line)
                 except ValueError:
@@ -251,7 +265,20 @@ def detect_format(path: str) -> str:
     return "generic"
 
 
-def load(path: str, fmt: str = "auto") -> Transcript:
+def load_many(path: str, fmt: str = "auto") -> List[Transcript]:
+    """Every transcript in a file: one for most formats, one per session for an OpenCode database."""
+    from .readers import read_codex, read_gemini, read_opencode
+
     if fmt == "auto":
         fmt = detect_format(path)
-    return read_claude(path) if fmt == "claude" else read_generic(path)
+    if fmt == "skip":
+        return []
+    if fmt == "opencode":
+        return read_opencode(path)
+    reader = {"claude": read_claude, "codex": read_codex, "gemini": read_gemini}.get(fmt, read_generic)
+    return [reader(path)]
+
+
+def load(path: str, fmt: str = "auto") -> Transcript:
+    found = load_many(path, fmt)
+    return found[0] if found else Transcript(path, Path(path).stem, Path(path).parent.name, False, [], "generic")

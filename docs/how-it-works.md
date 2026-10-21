@@ -249,3 +249,27 @@ not a causal claim.
   pricing and subscriptions are not modelled. Treat dollars as relative
   weights. On a subscription plan, a leak costs rate-limit headroom rather than
   money.
+
+## 11. Other tools' session stores
+
+`readers.py` turns Codex CLI rollouts, Gemini CLI chats and OpenCode's SQLite
+database into the same `Step`s. Two conventions differ from Anthropic's and
+are normalised on read: OpenAI and Gemini report cached tokens *inside* the
+input count (kvleak subtracts them, so `input` is always the uncached part),
+and neither charges a cache-write premium (GPT-5.6 and later do, 1.25×; the
+price table carries that). Thoughts and reasoning tokens are added to
+`output`. Everything downstream, from miss classification to the keep-alive
+budget, then works unchanged. Context-level analysis (`diet`, `tune`, hooks)
+needs the tool results themselves and stays Claude Code only.
+
+## 12. What-if (`kvleak whatif`)
+
+For a kind of context block (shell results, all tool results, the system
+prompt, replies, thinking) with total tokens `T`, entry cost `E = T × write`
+and carried cost `C` (§8), a tool that promises to shrink it by `p` saves at
+most `p · (E + C)`, plus `p · T × output` for the model's own output. The
+bill it is compared against is the audit's input cost plus output tokens at
+the output price. The `tune` row is §7's total. These are upper bounds: they
+ignore the extra turns the model spends re-fetching trimmed text, which the
+paired measurements in arXiv 2607.12161 found large enough to cancel the
+saving.
