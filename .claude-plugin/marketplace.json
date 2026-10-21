@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kvleak",
+  "description": "kvleak: find where Claude Code leaks prompt-cache money and cut the token cost with one command.",
+  "owner": {
+    "name": "kvleak contributors"
+  },
+  "plugins": [
+    {
+      "name": "kvleak",
+      "description": "Cut Claude Code token cost: audit prompt-cache leaks, price every token-saver on your own bill, fix most of it with one settings change. Adds the claude-code-token-cost skill.",
+      "category": "productivity",
+      "source": "./",
+      "homepage": "https://github.com/shangliy/kvleak",
+      "keywords": ["claude-code", "token-usage", "token-cost", "prompt-caching", "cost-optimization"]
+    }
+  ]
+}

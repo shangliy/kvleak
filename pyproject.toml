@@ -5,18 +5,23 @@ build-backend = "hatchling.build"
 [project]
 name = "kvleak"
 dynamic = ["version"]
-description = "Find where your AI coding agent leaks prompt-cache money (Claude Code, multi-agent, any JSONL) and how to stop it."
+description = "Cut Claude Code token cost: find where your prompt-cache money leaks and fix it with one command. Also Codex CLI, Gemini CLI, OpenCode, any JSONL."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [{ name = "kvleak contributors" }]
-keywords = ["claude-code", "prompt-caching", "kv-cache", "llm", "tokens", "cost", "multi-agent", "observability"]
+keywords = [
+  "claude-code", "claude", "anthropic", "token-usage", "token-cost", "tokens", "cost", "cost-optimization",
+  "prompt-caching", "kv-cache", "context-window", "context-engineering", "codex-cli", "gemini-cli", "opencode",
+  "llm", "ai-agents", "multi-agent", "observability",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
   "Topic :: Utilities",
 ]
@@ -34,6 +39,9 @@ Issues = "https://github.com/shangliy/kvleak/issues"
 
 [tool.hatch.version]
 path = "src/kvleak/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["docs/launch", "docs/assets", "bench", ".github"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kvleak"]

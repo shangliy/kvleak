@@ -1,4 +1,4 @@
-# kvleak
+# kvleak · cut Claude Code token cost at the source
 
 **Your Claude Code cache hit rate is 95%+. A quarter of your input spend still goes to cache rebuilds. kvleak shows where, and fixes most of it with one command.**  ·  [中文](README.zh-CN.md)
 
@@ -15,6 +15,9 @@
 ```bash
 uvx kvleak            # or: pipx run kvleak  ·  pip install kvleak
 ```
+
+Also a Claude Code skill, so Claude runs the audit when you ask why the bill is high:
+`npx skills add shangliy/kvleak` or `/plugin marketplace add shangliy/kvleak` then `/plugin install kvleak@kvleak`.
 
 No API key, no config, no network calls, no dependencies. It reads the session
 files **Claude Code, Codex CLI, Gemini CLI and OpenCode** already keep on disk
@@ -154,7 +157,9 @@ Numbers are the maintainer's 30 days; method and reproduction in
 `hooks`, `refine`) need the tool results themselves and read Claude Code only.
 
 Full tour with outputs: **[docs/guide.md](docs/guide.md)**. How every number is
-computed: [docs/how-it-works.md](docs/how-it-works.md).
+computed: [docs/how-it-works.md](docs/how-it-works.md). ccusage tells you how
+much you spent; kvleak tells you why and what to change. How it relates to rtk,
+caveman, claude-token-optimizer and cache-refresher: [docs/compare.md](docs/compare.md).
 
 ## FAQ
 

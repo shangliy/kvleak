@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Installable as a Claude Code skill (`npx skills add shangliy/kvleak`) and plugin
+  (`/plugin marketplace add shangliy/kvleak`): `skills/claude-code-token-cost/SKILL.md` runs the audit when
+  you ask about token cost and recommends by evidence; `.claude-plugin/` manifests.
+- `docs/compare.md`: how kvleak relates to ccusage, rtk, caveman, claude-token-optimizer and cache-refresher.
+- PyPI keywords and description name token cost and the other CLIs; sdist no longer ships launch material,
+  demo assets or the benchmark.
+
 ## 0.10.0 (2026-10-21)
 
 - `kvleak skills`: what the skill listing costs on every call (every SKILL.md's description is in the cached

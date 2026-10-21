@@ -1,4 +1,4 @@
-# kvleak
+# kvleak · 从源头降低 Claude Code 的 token 花费
 
 **你的 Claude Code 缓存命中率 95% 以上，输入花费却仍有四分之一用在了缓存重建上。kvleak 告诉你漏在哪，并用一条命令堵上大部分。**  ·  [English](README.md)
 
@@ -15,6 +15,9 @@
 ```bash
 uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 ```
+
+也可以装成 Claude Code 技能，你问"为什么账单这么高"时它自己跑审计：
+`npx skills add shangliy/kvleak`，或 `/plugin marketplace add shangliy/kvleak` 后 `/plugin install kvleak@kvleak`。
 
 不需要 API Key、不用配置、不联网、零依赖。它直接读 **Claude Code、Codex CLI、Gemini CLI、OpenCode**
 已经存在本机的会话文件，几秒钟出结果。订阅用户看到的美元是按目录价折算的，百分比就是你的限额余量。
@@ -138,7 +141,8 @@ $ kvleak tune
 上下文层面的命令（`diet`、`tune`、`hooks`、`refine`）需要工具输出本身，只读 Claude Code。
 
 带完整输出的全部功能：**[docs/guide.zh-CN.md](docs/guide.zh-CN.md)**。每个数字怎么算的：
-[docs/how-it-works.md](docs/how-it-works.md)。
+[docs/how-it-works.md](docs/how-it-works.md)。ccusage 告诉你花了多少，kvleak 告诉你为什么以及改哪里；
+和 rtk、caveman、claude-token-optimizer、cache-refresher 的关系见 [docs/compare.md](docs/compare.md)。
 
 ## FAQ
 
