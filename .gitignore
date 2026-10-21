@@ -17,3 +17,4 @@ bench/results/*/*
 !bench/results/*/results.json
 bench/results-*.log
 docs/launch/plan.zh.md
+*.mp4
