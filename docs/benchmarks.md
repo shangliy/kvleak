@@ -267,3 +267,31 @@ What this says, and what it does not:
 
 Spend for the whole benchmark: $14.78 at list price (subscription quota in
 practice). Raw per-run metrics: `bench/results/round2/results.json`.
+
+## 9. Learned keep-alive budget (`kvleak keepalive`)
+
+The break-even in §2 says pinging *can* pay for up to `K_max` pings. Whether
+it *does* depends on whether you come back while the entry is warm. On the
+same 30 days as §1 (`kvleak keepalive --since 30d`, 1 h TTL, mostly Opus 5.5,
+read 0.05×, write 2×):
+
+| | |
+|---|---|
+| Pauses that outlived the TTL (prefix ≥ 10k) | 323, of which 164 ended the session |
+| Came back within 1 ping / 2 / 5 / 14 (prefix-weighted) | 25% / 42% / 57% / 77% |
+| Saving of "ping up to k, then give up" vs. never pinging | k=1 $157 · k=2 $261 · k=5 **$337** (budget) · k=14 $413 (optimum) · k=79 $268 |
+| Pauses begun 12–14h | 109; 75% never came back; budget 4 pings |
+| Pauses begun 06–08h | 14; 14% never came back; budget 2 pings |
+| Pauses begun 21–23h | 46; 39% never came back; budget 11 pings (overnight returns) |
+
+The curve is flat past 5 pings: the optimum at 14 is driven by a few overnight
+returns and would cost almost three times the requests for the last fifth of
+the saving, so the recommended budget is the knee (80% of the optimum). This
+is larger than the §1 "Recoverable" line ($90) because that line only counts
+heavy misses and only gaps under 2 h; the policy accounting here counts every
+pause, including the ones where pinging was wasted.
+
+Method: [how-it-works.md §5a](how-it-works.md#5a-learned-keep-alive-budget-kvleak-keepalive).
+Caveats: list prices (quota on a subscription); the return rates are one
+person's habits; a pause inside a session includes long tool runs, which a
+keep-alive bridges just as well.

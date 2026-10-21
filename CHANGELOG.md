@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-20)
 
+- `kvleak keepalive`: a keep-alive budget learned from your own pauses. For every pause that outlived the TTL
+  (including the ones that ended the session) it prices "ping up to k times, then give up" against never
+  pinging, overall and per 3-hour local bucket of when the pause began, and recommends the knee of the curve.
+  On the maintainer's 30 days: 323 pauses, 164 never came back, 5 pings worth $337 (optimum 14, $413); lunch
+  pauses returned 25% of the time, 6–8 am ones 86%. kvleak does not send the ping; the budget is for a refresher
+  such as cache-refresher's `/cache-auto on <k>`.
+- Statusline shows `⚑ ≤k pings pay` in the last two minutes of the countdown, using the budget for the current
+  hour. `kvleak audit` stores the budget in `profile.json` alongside the session-length profile.
 - `bench/`: a before/after benchmark. Six generated, self-grading tasks (verbose test suites, a 130k-line incident
   log, a 17k-line build log, cross-file renames, data bugs, a deprecation walk) run through `claude -p` in four
   arms: baseline, hooks, rules, both. First result (Opus 5.5, 3 seeds, 72 runs): accuracy 1.00 in every arm, cost

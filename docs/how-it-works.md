@@ -59,7 +59,35 @@ pings    = ceil((g − TTL) / interval)        # pings needed to bridge the gap
 saving   = leak − pings · rebuilt · read_mult   if pings ≤ K_max else 0
 ```
 
-The sum of these savings is the **Recoverable** line in the report.
+The sum of these savings is the **Recoverable** line in the report. It is
+conservative: only heavy misses, only gaps under 2 h.
+
+### 5a. Learned keep-alive budget (`kvleak keepalive`)
+
+`K_max` is a ceiling; it says nothing about whether you come back. For every
+**pause** (a gap between two calls of a main session longer than the TTL, or
+the last call of a session whose transcript has been quiet for 2 h, which
+counts as "never came back") with prefix `N` tokens, and for every policy
+"ping up to `k` times, then give up":
+
+```
+j      = ceil((gap − TTL) / interval)          # pings that would have bridged it; ∞ if it never closed
+delta  = N · (write − read) − j · N · read      if j ≤ k      (came back while warm)
+       = −k · N · read                          otherwise     (pinged k times for nothing)
+```
+
+Summed over all pauses with the same TTL, each priced at its own model, this
+is the saving of policy `k` against never pinging. The **optimum** is the `k`
+with the largest total; the **budget** kvleak recommends is the smallest `k`
+that captures 80% of it, because past the knee the curve is flat, the optimum
+wanders with a handful of overnight returns, and each extra ping is a request
+of quota on a subscription. The same is computed per 3-hour local bucket of
+when the pause began (buckets with ≥8 pauses); `kvleak audit` and
+`kvleak keepalive` store both in `profile.json`, and the statusline reads the
+bucket for the current hour in the last two minutes of the countdown.
+
+kvleak does not send pings. The refresh must hit the same prefix from inside
+Claude Code; cache-refresher does that with `/cache-auto on <k>`.
 
 ## 6. Compaction advisor (`kvleak advise`)
 

@@ -37,7 +37,7 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "breakeven",
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "breakeven",
                "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
@@ -642,6 +642,71 @@ def cmd_session(args) -> int:
     return 0
 
 
+def cmd_keepalive(args) -> int:
+    from .advisor import Profile
+    from .keepalive import HOUR_WIDTH, budgets, by_hour, learned, pauses, return_curve
+
+    c = fmt.c
+    transcripts = load_all(_default_paths(args), args.format, args.since, args.project)
+    bs = budgets(transcripts, price_for)
+    if not bs:
+        print("kvleak: no pause longer than the TTL on a prefix ≥ 10k tokens in this history", file=sys.stderr)
+        return 1
+    window = "since {}".format(datetime.fromtimestamp(args.since, tz=timezone.utc).date()) if args.since else "all history"
+    for b in bs:
+        ttl = "1h" if b.ttl == TTL_1H else "5m"
+        price = price_for(b.model)
+        print(c("\n  Keep-alive budget from your own pauses · {} TTL · {} · {}".format(ttl, b.model, window), "bold"))
+        print("  {} pauses outlived the TTL, {} of them never came back (session ended).".format(
+            b.pauses, b.never_returned))
+        print("  One ping re-reads the prefix at {:g}×; an expiry rebuilds it at {:g}×, so pinging can pay for up to {} pings.".format(
+            price.read_mult, price.write_mult(b.ttl), b.kmax))
+        print()
+        rows = [["ping up to", "came back by then", "vs. never pinging"]]
+        best, rec = b.best.pings, b.recommended
+        for r in return_curve(b):
+            net = fmt.usd(r.saving_usd) if price.input_per_mtok else fmt.tok(r.saving) + " tok"
+            mark = "  ← budget" if r.pings == rec and rec else "  ← optimum" if r.pings == best and rec and best != rec else ""
+            rows.append([str(r.pings), fmt.pct(r.returned),
+                         ("–" if r.pings == 0 else c(net, "green" if r.saving_usd > 0 else "red")) + mark])
+        print(fmt.table(rows, "rrl"))
+        print()
+        if rec:
+            if best != rec:
+                print("  {} Up to {} pings was the optimum (≈{} vs. letting every pause expire); {} ping{} already get{} {} of it "
+                      "for a fraction of the requests, so that is the budget. With cache-refresher: {}".format(
+                          c("→", "green", "bold"), best, fmt.usd(b.best.saving_usd), rec, "s" if rec > 1 else "",
+                          "" if rec > 1 else "s", fmt.pct(b.rows[rec].saving_usd / b.best.saving_usd),
+                          c("/cache-auto on {}".format(rec), "bold")))
+            else:
+                print("  {} Pinging up to {} time{} paid on this history: ≈{} saved vs. letting every pause expire. "
+                      "With cache-refresher: {}".format(
+                          c("→", "green", "bold"), rec, "s" if rec > 1 else "",
+                          fmt.usd(b.best.saving_usd), c("/cache-auto on {}".format(rec), "bold")))
+        else:
+            print("  {} Pinging never paid on this history: you rarely come back before the rebuild would have cost less. "
+                  "Let it expire; reply before the countdown ends when you can.".format(c("→", "yellow", "bold")))
+        hours = by_hour(pauses(transcripts), price_for, b.ttl)
+        if len(hours) >= 2:
+            print()
+            print("  By local time of day the pause began (the statusline uses this):")
+            rows = [["pause began", "pauses", "never came back", "budget", "saved"]]
+            for start, hb in hours:
+                k = hb.recommended
+                rows.append(["{:02d}–{:02d}h".format(start, start + HOUR_WIDTH - 1), str(hb.pauses),
+                             fmt.pct(hb.never_returned / hb.pauses),
+                             c("{} ping{}".format(k, "s" if k > 1 else ""), "green") if k else c("let it expire", "yellow"),
+                             fmt.usd(hb.rows[k].saving_usd) if k else "–"])
+            print(fmt.table(rows, "lrrrr"))
+    if not args.path and not args.project and not args.since:
+        prof = Profile.load()
+        prof.keepalive, prof.keepalive_hours = learned(transcripts, price_for)
+        prof.save()
+    print(c("\n  Money only: a ping is also one request of quota on a subscription. The refresh must come from inside "
+            "Claude Code (same prefix); kvleak only sizes the budget.", "grey"))
+    return 0
+
+
 def cmd_breakeven(args) -> int:
     price = price_for(args.model)
     if price.input_per_mtok is None:
@@ -964,6 +1029,10 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--min-usd", type=float, default=5.0, metavar="USD",
                     help="only propose a rule whose evidence is worth at least this much (default 5)")
     rf.set_defaults(func=cmd_refine)
+
+    ka = sub.add_parser("keepalive", help="how many keep-alive pings your own idle pattern justifies")
+    _add_common(ka)
+    ka.set_defaults(func=cmd_keepalive)
 
     b = sub.add_parser("breakeven", help="keep-alive vs. rebuild calculator")
     b.add_argument("tokens", type=parse_tokens, help="cached prefix size, e.g. 150k")

@@ -25,6 +25,7 @@ from .sources import Step, read_claude
 TAIL_BYTES = 512 * 1024
 RING = "○◔◑◕●"
 HINT_MIN_CONTEXT = 100_000  # below this the advisor never fires, so skip the transcript
+PING_HINT_S = 120  # show the keep-alive budget only in the countdown's last two minutes
 
 
 def _recent_steps(path: str) -> Tuple[List[Step], int]:
@@ -84,9 +85,29 @@ def render(payload: dict, now: Optional[float] = None) -> str:
     glyph = RING[min(int(frac * (len(RING) - 1)) + 1, len(RING) - 1)]
     color = "green" if left > 120 else "yellow" if left > 45 else "red"
     clock = "{}:{:02d}".format(int(left) // 60, int(left) % 60)
+    if left <= PING_HINT_S:
+        hint += _ping_hint(ttl, now)
     return "{} cache {} · {} ctx · rebuild {}{}".format(
         c(glyph, color), c(clock, color, "bold"), tok(cached), cost, hint
     )
+
+
+def _ping_hint(ttl: int, now: float) -> str:
+    """' · ⚑ ≤2 pings pay' in the last two minutes, from `kvleak keepalive`'s learned budget.
+
+    Uses the budget for pauses that began at this local hour when there is one
+    (noon pauses and evening pauses come back at different rates). Only shown
+    when pinging paid on this machine's history; "let it expire" is what the
+    countdown already says.
+    """
+    from datetime import datetime
+
+    from .advisor import Profile
+
+    k = Profile.load().ping_budget("1h" if ttl == TTL_1H else "5m", datetime.fromtimestamp(now).hour)
+    if k < 1:
+        return ""
+    return " · " + c("⚑ ≤{} ping{} pay".format(k, "s" if k > 1 else ""), "yellow")
 
 
 def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], price, now: float, cold: bool = False) -> str:

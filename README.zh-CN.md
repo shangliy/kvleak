@@ -25,6 +25,7 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 - 机械链（连续 3 次以上 `ls`/`cat`/`grep`/小读取、中间没有真正的决策）：**493 条，占 9,924 次调用中的 2,235 次**；合成脚本最多 **−$160**
 - `kvleak refine`：5 条写进 CLAUDE.md 的规则，每条都附带证据，合计覆盖 **≈$640 / 30 天** 的可测量浪费
 - A/B benchmark（`bench/`，Opus 5.5 上 72 次 `claude -p`）：**每个 arm 准确度都是 1.00**；输出 1.7 万行和 13 万行的两个任务成本 −16% 到 −17%，四个短任务在噪音范围内（±5%）。大头要在长会话里才能省
+- `kvleak keepalive`：同样的 30 天里 323 次停顿超过了 1 小时 TTL，164 次再也没回来；"最多 ping 5 次再放弃"本可省 **$337**（最优 14 次、$413）。午饭时开始的停顿只有 25% 会回来，早上 6–8 点开始的有 86%
 
 ## 功能
 
@@ -40,7 +41,8 @@ uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
 | `kvleak hooks --install` | 装 4 个 Claude Code hook：**长 shell 输出不进上下文**（模型只看到头、尾、报错行和完整输出的路径），**压缩不再丢东西**（被压掉的全部归档，并告诉模型怎么查） |
 | `kvleak recall "<regex>"` | 搜索被压缩掉的历史。模型自己也会用它 |
 | `kvleak refine --apply` | 把**有证据的上下文卫生规则**写进 `CLAUDE.md`，每条规则都要在你自己的历史上值一个金额才会出现；之后 `--probe` 对比前后，告诉你哪条规则真的改变了行为 |
-| `kvleak breakeven 150k --idle 20m` | 保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
+| `kvleak keepalive` | 从你自己的停顿记录里学出**保活 ping 几次才划算**（整体和分时段），倒计时最后两分钟 statusline 会显示；把这个预算交给刷新工具（cache-refresher 的 `/cache-auto on <k>`） |
+| `kvleak breakeven 150k --idle 20m` | 单次计划停顿：保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
 | `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
 | `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
 
@@ -169,7 +171,7 @@ probe 步骤，只不过跑在你的真实会话上而不是 benchmark 上；它
 
 | 原因 | 含义 | 修复方向 |
 |---|---|---|
-| 空闲超过 TTL | 离开超过 5 分钟（或 1 小时），下一条消息全量重建 | 看倒计时及时回复、批量处理、按盈亏平衡点限制保活次数 |
+| 空闲超过 TTL | 离开超过 5 分钟（或 1 小时），下一条消息全量重建 | 看倒计时及时回复、批量处理、用 `kvleak keepalive` 学出的次数做保活 |
 | TTL 内前缀变化 | 时间戳、未排序 JSON、工具列表变化导致前缀击穿 | 前缀确定性：`json.dumps(..., sort_keys=True)`、静态 System Prompt |
 | 会话中途切模型 | KV Cache 按模型物理隔离，切换必然全价重算 | 每个 Worker 锁定单一模型，跨模型用文件指针交接 |
 | 历史压缩 | `/compact` 或自动压缩重写历史 | 在自然断点主动压缩一次 |

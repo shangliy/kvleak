@@ -22,9 +22,9 @@ import bisect
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .pricing import TTL_1H, TTL_5M, Price
 from .sources import Step, Transcript
@@ -50,6 +50,19 @@ class Profile:
     lengths: List[int]  # calls per interactive main session, sorted
     miss_rate: float = DEFAULT_MISS_RATE
     compact_floor: int = DEFAULT_BASE + DEFAULT_SUMMARY  # context size right after a compaction
+    keepalive: Dict[str, int] = field(default_factory=dict)  # TTL label -> pings worth sending (0: let it expire)
+    keepalive_hours: Dict[str, Dict[str, int]] = field(default_factory=dict)  # TTL label -> local hour bucket -> pings
+
+    def ping_budget(self, ttl_label: str, hour: Optional[int] = None) -> int:
+        """Pings worth sending for a pause starting at this local hour (falls back to the overall budget)."""
+        from .keepalive import HOUR_WIDTH
+
+        if hour is not None:
+            hours = self.keepalive_hours.get(ttl_label) or {}
+            key = str(hour // HOUR_WIDTH * HOUR_WIDTH)
+            if key in hours:
+                return hours[key]
+        return self.keepalive.get(ttl_label, 0)
 
     def expected_remaining(self, n: int) -> float:
         """Median of (L - n) over past sessions longer than n, capped at HORIZON.
@@ -65,12 +78,15 @@ class Profile:
 
     @classmethod
     def from_transcripts(cls, transcripts: Iterable[Transcript], misses: int = 0, calls: int = 0) -> "Profile":
+        from .keepalive import learned
         from .policy import learned_floor
+        from .pricing import price_for
 
         transcripts = list(transcripts)
         lengths = sorted(len(t.steps) for t in transcripts if not t.is_subagent and len(t.steps) >= 5)
         rate = misses / calls if calls else DEFAULT_MISS_RATE
-        return cls(lengths, round(rate, 4), learned_floor(transcripts, DEFAULT_BASE + DEFAULT_SUMMARY))
+        keepalive, hours = learned(transcripts, price_for)
+        return cls(lengths, round(rate, 4), learned_floor(transcripts, DEFAULT_BASE + DEFAULT_SUMMARY), keepalive, hours)
 
     def save(self) -> None:
         p = profile_path()
@@ -85,7 +101,9 @@ class Profile:
         try:
             raw = json.loads(profile_path().read_text(encoding="utf-8"))
             return cls(sorted(raw["lengths"]), raw.get("miss_rate", DEFAULT_MISS_RATE),
-                       int(raw.get("compact_floor", DEFAULT_BASE + DEFAULT_SUMMARY)))
+                       int(raw.get("compact_floor", DEFAULT_BASE + DEFAULT_SUMMARY)),
+                       {k: int(v) for k, v in (raw.get("keepalive") or {}).items()},
+                       {k: {h: int(v) for h, v in d.items()} for k, d in (raw.get("keepalive_hours") or {}).items()})
         except (OSError, ValueError, KeyError):
             return cls([])
 

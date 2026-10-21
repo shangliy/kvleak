@@ -69,6 +69,7 @@ No API key, no config, no network calls, no dependencies. It reads
 | Mechanical chains (3+ consecutive `ls`/`cat`/`grep`/read steps with no decision between them) | **493 chains, 2,235 of 9,924 calls**; as single scripts, up to **−$160** |
 | `kvleak refine` on the same history | 5 rules for CLAUDE.md, each with its evidence; together they cover **≈$640 / 30 d** of measured waste |
 | A/B benchmark, 72 `claude -p` runs on Opus 5.5 (`bench/`) | **accuracy 1.00 in every arm**; cost −16% to −17% on the two tasks with 17k- and 130k-line output, within noise (±5%) on the four short ones. The big savings need long sessions. |
+| `kvleak keepalive` on the same 30 days | 323 pauses outlived the 1 h TTL, 164 never came back; pinging up to **5 times** before giving up would have saved **$337** (the optimum, 14 pings, $413). Pauses that began at lunch came back 25% of the time, those at 6–8 am 86%. |
 
 Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -88,7 +89,8 @@ Methodology and reproduction commands: [docs/benchmarks.md](docs/benchmarks.md).
 | `kvleak hooks --install` | Claude Code hooks that **keep long shell output out of the context** (the model sees head + tail + error lines + a path to the rest) and **make compaction lossless** (everything dropped is archived and the model is told how to search it). |
 | `kvleak recall "<regex>"` | Searches what a compaction dropped. The model runs it too. |
 | `kvleak refine --apply` | Writes **evidence-backed context-hygiene rules** to `CLAUDE.md`, each gated on a dollar figure from your own history; `--probe` later tells you which rules changed behaviour. |
-| `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die. |
+| `kvleak keepalive` | Learns from your own pauses **how many keep-alive pings pay** before you give up on a cache, overall and by time of day; the statusline shows it in the last two minutes of the countdown. Gives the budget to hand a refresher tool. |
+| `kvleak breakeven 150k --idle 20m` | Tells you whether to keep this cache alive or let it die, for one planned pause. |
 | `kvleak pointer build.log --status FAIL` | Turns a huge file into a ~60-token hand-off message for multi-agent boards. |
 | `kvleak --fail-over 15` | Exits with code 2 when more than 15% of input spend leaked, so it can gate CI or nightly jobs. |
 
@@ -327,6 +329,44 @@ $ kvleak breakeven 100k --model claude-sonnet-5 --idle 20m
 
 The rule is `K_max = floor((write − read) / read)`: 11 pings at 0.10× reads,
 24 at 0.05×, 49 at 0.025×. Past that, let the cache expire.
+
+That is the ceiling. Whether pinging *pays* depends on whether you come back
+while the entry is still warm, and your transcripts know that. `kvleak keepalive`
+takes every pause that outlived the TTL, including the ones that ended the
+session, and prices the policy "ping up to k times, then give up" for every k:
+
+```text
+$ kvleak keepalive --since 30d
+
+  Keep-alive budget from your own pauses · 1h TTL · claude-opus-5-5 · since 2026-09-21
+  323 pauses outlived the TTL, 164 of them never came back (session ended).
+  One ping re-reads the prefix at 0.05×; an expiry rebuilds it at 2×, so pinging can pay for up to 79 pings.
+
+  ping up to  came back by then  vs. never pinging
+           0               0.0%  –
+           1              25.2%  $156.76
+           2              42.0%  $260.79
+           5              56.9%  $336.75  ← budget
+          14              77.1%  $413.12  ← optimum
+          79              81.1%  $268.19
+
+  → Up to 14 pings was the optimum (≈$413.12 vs. letting every pause expire); 5 pings already get 81.5% of it
+    for a fraction of the requests, so that is the budget. With cache-refresher: /cache-auto on 5
+
+  By local time of day the pause began (the statusline uses this):
+  pause began  pauses  never came back    budget   saved
+  06–08h           14            14.3%   2 pings  $32.78
+  12–14h          109            75.2%   4 pings  $81.32
+  21–23h           46            39.1%  11 pings  $41.38
+```
+
+kvleak never sends the ping itself: a refresh has to come from inside Claude
+Code, on the same prefix, which is what
+[cache-refresher](https://github.com/olddonkey/cache-refresher) does
+(`/cache-auto on <k>`). kvleak sizes `k` from your history, and the statusline
+shows `⚑ ≤5 pings pay` in the last two minutes of the countdown, using the
+budget for the hour the pause began. On a subscription a ping is a request of
+quota rather than dollars; the relative numbers still hold.
 
 ## Running multi-agent swarms?
 
