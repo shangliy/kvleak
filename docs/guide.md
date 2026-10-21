@@ -72,6 +72,12 @@ When the ring is almost empty, sending your next message *now* refreshes the
 TTL at the cost of a cache read. If you already have a statusline script, call
 `kvleak statusline` from it; it reads the same JSON on stdin.
 
+Claude Code re-runs a statusline on events only (a message, a tool call, the
+cache reaching `expires_at`), so the install also sets `refreshInterval: 5` and
+the clock ticks while you read. `--refresh 1` for a smooth second-by-second
+countdown (one 50 ms kvleak run per second), `--refresh 0` for events only. The
+line appears in sessions started after the install, after their first reply.
+
 ## When is a big context costing more than it saves?
 
 Caching makes a long context cheap, but not free. Every call re-reads the whole

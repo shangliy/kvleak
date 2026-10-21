@@ -76,7 +76,9 @@ def test_statusline_install_is_safe(tmp_path, monkeypatch, capsys):
     assert main(["statusline", "--install", "--force"]) == 0
     data = json.loads(settings.read_text())
     assert "kvleak" in data["statusLine"]["command"] and data["theme"] == "dark"
+    assert data["statusLine"]["refreshInterval"] == 5  # ticks while idle; Claude Code only re-runs on events
     assert (tmp_path / "settings.json.kvleak.bak").exists()
-    assert main(["statusline", "--install"]) == 0  # idempotent
+    assert main(["statusline", "--install", "--refresh", "0"]) == 0  # idempotent, events only
+    assert "refreshInterval" not in json.loads(settings.read_text())["statusLine"]
     assert main(["statusline", "--uninstall"]) == 0
     assert "statusLine" not in json.loads(settings.read_text())

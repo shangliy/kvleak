@@ -36,6 +36,24 @@ equivalents; the percentages are your rate-limit headroom.
 
 <sub>The maintainer's last 30 days. Yours will differ; that is the point. Post yours in [#1](https://github.com/shangliy/kvleak/issues/1).</sub>
 
+## Turn it on
+
+The audit changes nothing. These four do, each with an undo, and each takes
+effect in Claude Code sessions started afterwards:
+
+```bash
+pip install kvleak
+kvleak tune --apply          # settings.json: compaction window, cache TTLs, idle compaction, Bash cap   (--reset)
+kvleak hooks --install       # long shell output stays out of the context; compaction keeps an archive  (--uninstall)
+kvleak refine --apply        # context-hygiene rules, with their dollar figures, in ~/.claude/CLAUDE.md (--remove)
+kvleak statusline --install  # cache countdown in the status bar, ticking while you read              (--uninstall)
+```
+
+How to tell it worked: `/hooks` in Claude Code lists four kvleak entries, the
+status bar reads `● cache 59:47 · 86k ctx · rebuild $1.73` after the first
+reply, and a long `seq 1 20000` comes back as head + tail + a path instead of
+20,000 lines. A week later, `kvleak probe` puts a number on it.
+
 ## Why the hit rate lies
 
 A cache hit costs 0.1× the input price (0.025× on Fable 5.1). A rebuild costs

@@ -22,7 +22,7 @@
 | `kvleak` | 全量审计：命中率、漏损金额、按原因拆解、最漏的会话、最贵的单次未命中、可执行建议 |
 | `kvleak --since 7d --html report.html` | 生成可分享的自包含 HTML 报告（亦支持 `--markdown` / `--json`） |
 | `kvleak session <id>` | 单个会话逐步时间线，标出每一次未命中及原因 |
-| `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89` |
+| `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89`。Claude Code 本身只在有事件时重跑状态栏，所以安装时会写入 `refreshInterval: 5` 让它空闲时也每 5 秒走一格（`--refresh 1` 每秒走，`--refresh 0` 只跟事件）。装完后**新开**的会话、第一条回复之后才会出现 |
 | `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
 | `kvleak tune --apply` | 用你的历史回测 Claude Code 自带的缓存设置（自动压缩窗口、缓存 TTL、空闲压缩阈值），把最省钱的值**直接写进 `settings.json`** |
 | `kvleak diet` | 拆开上下文：**到底是什么把它填满的**（工具输出、你贴的文本、模型自己的回复、系统提示词），每一块被携带了多少次、花了多少钱，并点名最贵的单项；`--all` 汇总 30 天 |

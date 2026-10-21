@@ -1060,10 +1060,17 @@ def cmd_statusline(args) -> int:
         print("kvleak: you already have a statusLine:\n  {}\nRe-run with --force to replace it, or add\n  {}\n"
               "to your own statusline script.".format(json.dumps(existing), command))
         return 1
-    data["statusLine"] = {"type": "command", "command": command, "padding": 0}
+    line = {"type": "command", "command": command, "padding": 0}
+    # Claude Code re-runs the statusline on events only (a message, a tool call, the cache going cold), so
+    # without a timer the countdown freezes while you read or think. refreshInterval re-runs it every N seconds.
+    if args.refresh > 0:
+        line["refreshInterval"] = args.refresh
+    data["statusLine"] = line
     settings = _write_settings(data)
-    print("Installed. Claude Code will show the cache countdown on its next refresh.\n"
-          "  settings: {}\n  undo:     kvleak statusline --uninstall".format(settings))
+    tick = ("ticks every {}s while idle (--refresh N to change, 0 for events only)".format(args.refresh)
+            if args.refresh > 0 else "updates on events only (--refresh N to tick while idle)")
+    print("Installed. New Claude Code sessions show the cache countdown; it {}.\n"
+          "  settings: {}\n  undo:     kvleak statusline --uninstall".format(tick, settings))
     return 0
 
 
@@ -1202,6 +1209,8 @@ def build_parser() -> argparse.ArgumentParser:
     sl.add_argument("--install", action="store_true", help="add kvleak to ~/.claude/settings.json")
     sl.add_argument("--uninstall", action="store_true", help="remove it again")
     sl.add_argument("--force", action="store_true", help="replace an existing statusLine")
+    sl.add_argument("--refresh", type=int, default=5, metavar="N",
+                    help="also re-run every N seconds so the countdown ticks while idle (default 5; 0 = events only)")
     sl.set_defaults(func=cmd_statusline)
 
     pt = sub.add_parser("pointer", help="compact hand-off pointer for a big file")

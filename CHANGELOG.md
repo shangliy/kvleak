@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 (2026-10-21)
+
+- `kvleak statusline --install` now also sets `refreshInterval` (default 5 s, `--refresh N`, `0` for events
+  only). Claude Code re-runs a statusline on events alone, so the countdown used to freeze while you read.
+- README: a "Turn it on" block with the four commands that change something, how to check each took effect.
+
 ## 0.9.0 (2026-10-21)
 
 - `kvleak probe`: did it help? `tune --apply`, `hooks --install` and `refine --apply` now record when they ran;

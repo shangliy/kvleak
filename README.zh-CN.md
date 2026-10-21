@@ -34,6 +34,22 @@ uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 
 <sub>维护者自己最近 30 天的数据。你的会不一样，这正是要你自己跑一遍的原因。欢迎把你的贴到 [#1](https://github.com/shangliy/kvleak/issues/1)。</sub>
 
+## 装上
+
+审计什么都不改。下面四条才会改，每条都能撤销，都只对装完之后**新开**的 Claude Code 会话生效：
+
+```bash
+pip install kvleak
+kvleak tune --apply          # settings.json：压缩窗口、缓存 TTL、空闲压缩、Bash 输出上限   （--reset 撤销）
+kvleak hooks --install       # 长 shell 输出不进上下文；压缩丢掉的内容留档                （--uninstall）
+kvleak refine --apply        # 带金额的上下文卫生规则写进 ~/.claude/CLAUDE.md             （--remove）
+kvleak statusline --install  # 状态栏缓存倒计时，空闲时也在走                              （--uninstall）
+```
+
+怎么确认生效：Claude Code 里输入 `/hooks` 能看到四条 kvleak 记录；第一条回复之后状态栏显示
+`● cache 59:47 · 86k ctx · rebuild $1.73`；让它跑一条 `seq 1 20000`，回来的是头、尾加一个路径，
+不是两万行。一周后 `kvleak probe` 给出数字。
+
 ## 为什么命中率会骗人
 
 一次缓存命中按输入价的 0.1× 计费（Fable 5.1 上是 0.025×），一次重建是 1.25× 到 2×。
