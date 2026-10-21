@@ -14,6 +14,8 @@ Prompt Cache 的计费是不对称的：命中 0.1×（Fable 5.1 上 0.025×）�
 
 一行 `uvx kvleak`，读本地已有的会话文件，不联网、零依赖、也支持 Codex CLI / Gemini CLI / OpenCode。MIT 开源 👉 https://github.com/shangliy/kvleak
 
+两分钟视频把原理、数字和四条命令讲完（即刻 / 微博直接上传 `~/Downloads/kvleak-demo.mp4`；X 中文用 140 s 版）。
+
 ## V2EX（分享创造）/ 知乎
 
 **标题：** 开源了一个工具：Claude Code 缓存命中率 95%，为什么还有五分之一的输入花费在缓存重建上？以及"省 60–90% token"为什么不省钱

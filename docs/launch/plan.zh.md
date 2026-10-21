@@ -15,8 +15,10 @@
 
 | 素材 | 位置 | 状态 |
 |---|---|---|
-| 终端演示 GIF（audit → whatif → tune，35 s） | `docs/assets/demo.gif` | 完成，README 顶部已挂 |
-| 同内容 mp4（X 自动播放，430 KB） | 发布前用 `ffmpeg -i docs/assets/demo.gif -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -r 15 demo.mp4` 生成 | 一条命令 |
+| **讲解视频 2:23，1080p 带音频**（命中率骗人 → 看漏损 → 改设置 → 前后对比 → benchmark → 四条命令 → probe） | 原片 `~/Downloads/kvleak-demo.mp4`；公开地址 https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4 | 完成；X 线程第 1 条、Reddit 帖用它 |
+| X 版（≤ 2:20，非 Premium 账号的上限） | `~/Downloads/kvleak-demo-x-140s.mp4` | 完成，只剪掉片尾 3.8 s |
+| 视频缩略图 | `~/Downloads/kvleak-thumb-leak.png`（$537.72 页）、`~/Downloads/kvleak-thumb-before-after.png` | 完成，YouTube 封面 / Reddit 预览 |
+| 终端演示 GIF（audit → whatif → tune，35 s） | `docs/assets/demo.gif` | 完成，README 顶部；GitHub 不会内嵌播放 release 附件，所以 README 保留 GIF、下面加视频链接 |
 | 审计报告截图 | `docs/assets/report.png` | 完成 |
 | 状态栏倒计时录屏 | `asciinema rec -c claude x.cast` → `agg --speed 2 x.cast x.gif` | **待你录**，推文 7 用 |
 | README（英/中） | `README.md` / `README.zh-CN.md` | 完成，"装上"四条命令在审计块下方 |
@@ -31,8 +33,8 @@
 |---|---|---|---|
 | D-1 周二晚 | 任意 | 干净环境跑 `uvx kvleak` 确认 0.9.1 可用；录状态栏 GIF；生成 mp4；在自己机器上 `tune --apply` 让 probe 开始计时 | 本文 §1 |
 | **D0 周三** | **6:30–7:00** | **Show HN**。发完前两小时守评论区，每条评论 10 分钟内回 | `en.md` Show HN + 问答 |
-| D0 | 7:15 | X 六条线程，第 1 条附 mp4，发完置顶 | `en.md` X thread |
-| D0 | 9:30 | r/ClaudeAI（标题一），附 GIF，正文贴 whatif 表 | `en.md` Reddit |
+| D0 | 7:15 | X 七条线程，第 1 条附 140 s 视频，发完置顶 | `en.md` X thread |
+| D0 | 9:30 | r/ClaudeAI（标题一），视频帖，正文贴 whatif 表 | `en.md` Reddit |
 | D0 | 全天 | HN 若进首页：在 issue #1 贴自己的三张表作示范，降低别人贴数字的门槛 | README 审计块 |
 | D1 周四 | 9:00 | r/LocalLLaMA（标题二，"token 少了账单没动"角度） | `en.md` Reddit |
 | D1 | 任意 | 即刻 + X 中文一段；V2EX 分享创造 | `zh.md` |

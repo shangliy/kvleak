@@ -48,7 +48,7 @@ Your cache isn't failing often. It's failing *big*. [attach report.png]
 
 ---
 
-**5 · Four settings (attach demo.gif)**
+**5 · Four settings (attach demo.gif; the video already went out with the thread)**
 Claude Code already has the settings that fix most of the leak: compaction window, cache TTLs, idle compaction, Bash output cap. Defaults tuned for nobody.
 
 `kvleak tune` replays your 30 days under every value. `--apply` writes the winners. −45% input spend on mine.

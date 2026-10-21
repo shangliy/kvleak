@@ -10,6 +10,8 @@
 
 ![kvleak audit, whatif and tune on the maintainer's history](docs/assets/demo.gif)
 
+<sub>▶ [Two-minute video](https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4): why the hit rate lies, the leak, the fix, before/after, the benchmark.</sub>
+
 ```bash
 uvx kvleak            # or: pipx run kvleak  ·  pip install kvleak
 ```

@@ -10,6 +10,8 @@
 
 ![kvleak 审计、whatif 和 tune 在维护者历史上的输出](docs/assets/demo.gif)
 
+<sub>▶ [两分钟视频](https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4)：命中率为什么骗人、漏在哪、怎么修、前后对比、benchmark。</sub>
+
 ```bash
 uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 ```

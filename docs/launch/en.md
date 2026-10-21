@@ -1,8 +1,21 @@
 # Launch copy (English)
 
 Numbers match the README audit block (maintainer's 30 days, 2026-09-21 to 2026-10-20)
-and docs/benchmarks.md. Assets: docs/assets/demo.gif (audit → whatif → tune),
-docs/assets/report.png.
+and docs/benchmarks.md.
+
+Assets:
+- **Explainer video, 2:23, 1080p with audio** (hit rate lies → see the leak → fix the
+  settings → before/after → benchmark → four commands → probe):
+  https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4
+  X-safe cut (≤2:20 for non-Premium accounts): `~/Downloads/kvleak-demo-x-140s.mp4`
+- Terminal GIF (audit → whatif → tune, 35 s): docs/assets/demo.gif
+- Thumbnails: `~/Downloads/kvleak-thumb-leak.png` ($537.72 slide),
+  `~/Downloads/kvleak-thumb-before-after.png` ($3,053 → $2,266 slide)
+- docs/assets/report.png
+
+Where each goes: X thread tweet 1 and Reddit posts carry the video; HN gets the repo
+URL and a "2-minute video" line in the text; the README keeps the GIF (GitHub does
+not inline-play release assets) with a link to the video under it.
 
 ## Show HN
 
@@ -49,6 +62,9 @@ Also in the box: a statusline with a live TTL countdown, hooks that keep long
 shell output out of the context and make compaction lossless, and a keep-alive
 budget learned from when you actually come back from pauses.
 
+Two-minute video of the whole argument, numbers and commands:
+https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4
+
 I would like other people's numbers; the audit is three seconds and local.
 There is an issue for that: https://github.com/shangliy/kvleak/issues/1
 
@@ -83,37 +99,53 @@ only for now.
 
 **r/LocalLLaMA / r/programming title:** "60–90% fewer tokens" did not shrink my Claude Code bill. Here is what did (with a tool to replay it on yours).
 
-**Body:** the Show HN text above, with docs/assets/demo.gif attached and the
-`kvleak whatif` table pasted as a code block. End with the four-command "Turn it
-on" block from the README.
+**Body:** the Show HN text above. Upload the video as a Reddit video post
+(r/ClaudeAI allows it; for text-only subs link the release asset), paste the
+`kvleak whatif` table as a code block, end with the four-command "Turn it on"
+block from the README.
 
 ## X / Twitter launch thread
 
-1/ My Claude Code cache hit rate over 30 days: 95.4%.
-Input spend that still went to cache rebuilds: $538, a fifth of it.
+Tweet 1 carries the video (`~/Downloads/kvleak-demo-x-140s.mp4`, under the 2:20
+limit). X autoplays muted, which is fine: every number in the video is on screen.
+The thread follows the video's chapters so a reader who stops at any tweet has
+seen the same argument.
 
-Hit rate counts tokens. Your bill counts misses × context size.
+1/ My Claude Code cache hit rate over 30 days: 95.4%. Looks healthy.
 
-I built a tool that shows the real number. `uvx kvleak` 🧵 [attach demo.gif]
+Input spend that still went to cache rebuilds: $537.72. A fifth of it.
 
-2/ Prompt caching is asymmetric. A hit is 0.1× (0.025× on Fable 5.1). A rebuild is 1.25–2×.
+Hit rate counts tokens. Your bill counts misses × context size. 2 minutes on why, and the fix 🧵 [attach video]
 
-One miss on a 200k context = 80 hits. 2% of my calls carried more than half of all uncached input.
+2/ Why the hit rate lies: a cache hit is 0.1× the input price (0.025× on Fable 5.1). A rebuild is 1.25–2×.
 
-3/ 69% of the leak was walking away. Claude Code caches for 1h now, so the expensive gaps are lunch, meetings, overnight.
+One miss on a 200k context = 80 hits.
 
-Idle 84 min → $8.92 rebuild. One message at minute 59 → $0.11.
+2.2% of my calls were heavy misses. They carried 53.7% of all uncached input. The hit rate never moved.
 
-4/ The surprise: "60–90% fewer tokens" tools shrink what the context *carries*, paid at cache-read price, the cheapest line.
+3/ See the leak: `uvx kvleak`. No API key, no config, no network. It reads the session files Claude Code already keeps.
 
-2,848 billed runs: −38% tool output → +6.8% cost (arXiv 2607.12161).
+#1 cause on my machine: idle gaps past the TTL, 69% of the leak. Lunch, meetings, overnight.
 
-`kvleak whatif` replays each tool's promise on your bill. Mine: rtk 7%, four settings 26%.
+4/ Fix the settings: Claude Code already has them (compaction window, cache TTLs, idle compaction, Bash output cap). Defaults tuned for nobody.
 
-5/ Those four settings are already in Claude Code (compaction window, TTLs, idle compaction, Bash cap), tuned for nobody.
+`kvleak tune` replays your 30 days under every value. `--apply` writes the winners. Mine: $909 / 30 days, −45% of input spend.
 
-`kvleak tune` replays your 30 days under every value. `--apply` writes the winners. −45% input spend on mine. 72-run benchmark: accuracy 1.0 in every arm.
+5/ Before vs after, whole bill: $3,053 → $2,266 per 30 days, −26%.
 
-6/ Zero deps, no API key, no network, reads Claude Code + Codex CLI + Gemini CLI + OpenCode.
+And the accuracy check: 72 benchmark runs, 4 arms, every run scored 1.00.
+
+(What "60–90% fewer tokens" tools do to the same bill: −7%. Carrying is paid at cache-read price, the cheapest line. `kvleak whatif` shows yours.)
+
+6/ Four commands, each with an undo:
+
+kvleak tune --apply
+kvleak hooks --install
+kvleak refine --apply
+kvleak statusline --install
+
+A week later `kvleak probe` shows your own before/after, measured on what was billed.
+
+7/ Zero deps, MIT, reads Claude Code + Codex CLI + Gemini CLI + OpenCode.
 
 `uvx kvleak` takes 3 seconds. Post your numbers: github.com/shangliy/kvleak/issues/1
