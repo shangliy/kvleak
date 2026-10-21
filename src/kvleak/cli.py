@@ -8,7 +8,8 @@
     kvleak tune                  backtest Claude Code's cache settings on your history
     kvleak tune --apply          ...and write the winners to ~/.claude/settings.json
     kvleak diet                  what filled the context, and what each piece cost to carry
-    kvleak hooks --install       keep long shell output out of the context; make compaction lossless
+    kvleak skills                what the skill listing costs on every call, and which loaded skills cost to carry
+    kvleak hooks --install      keep long shell output out of the context; make compaction lossless
     kvleak recall "<regex>"      search the history a compaction dropped
     kvleak refine --apply        write evidence-backed context-hygiene rules to ~/.claude/CLAUDE.md
     kvleak refine --probe        did the rules change behaviour? before/after contrast
@@ -37,7 +38,7 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load, load_many
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "whatif", "probe", "breakeven",
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "whatif", "probe", "skills", "breakeven",
                "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
@@ -606,6 +607,14 @@ def cmd_whatif(args) -> int:
         plan, _, _, _, _ = _tune_plan(args, claude_t, since)
         tune_total = sum(r["saving_usd"] for r in plan["rows"] if r["applies"])
         rows.append(("kvleak tune --apply", "compaction window, TTLs, idle compaction, Bash cap", tune_total))
+    if claude_t:
+        from .skills import installed
+        from .skills import report as skills_report
+
+        sk = skills_report(claude_t, installed(), _profile(args).miss_rate)
+        if sk.rows:
+            rows.append(("Unused skills off", "kvleak skills: {} of {} never invoked".format(len(sk.unused), len(sk.rows)),
+                         sk.unused_usd + sk.repeat_usd))
     table = [["if you…", "who promises it", "bill saving", "share of bill"]]
     for name, who, saving in sorted(rows, key=lambda r: -r[2]):
         table.append([name, who, c("−" + fmt.usd(saving), "green" if saving >= 1 else "grey"), fmt.pct(saving / bill)])
@@ -619,6 +628,64 @@ def cmd_whatif(args) -> int:
     if not main_t and claude_t == []:
         print(c("  No Claude Code sessions in the window: the context levers need them; the bill above is from "
                 "{}.".format(", ".join(sorted({t.source for t in transcripts}))), "grey"))
+    return 0
+
+
+def cmd_skills(args) -> int:
+    """What the skill listing costs on every call, and what loaded skill bodies cost to carry."""
+    from .skills import disable_hint, installed, report
+
+    c = fmt.c
+    since = args.since if args.since is not None else time.time() - 30 * 86400
+    transcripts = [t for t in load_all(_default_paths(args), args.format, since, args.project) if t.source == "claude"]
+    if not transcripts:
+        print("kvleak: no Claude Code transcripts in that window", file=sys.stderr)
+        return 1
+    skills = installed()
+    rep = report(transcripts, skills, _profile(args).miss_rate)
+    if args.json:
+        print(json.dumps(rep.to_dict(), indent=1))
+        return 0
+    window = _window_label(since)
+    print(c("\n  kvleak skills · {} skills listed · {} sessions · {} model calls over the last {}".format(
+        len(rep.rows), f"{rep.sessions:,}", f"{rep.calls:,}", window), "bold"))
+    if not rep.rows:
+        print("  No SKILL.md found under {} (skills/, enabled plugins) or bundled with Claude Code.".format(
+            os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")))
+    print("  Listed in every call: {} tokens of skill descriptions ≈ {} / {} (written at each session start, read on every call)".format(
+        fmt.tok(rep.listing_tokens), c(fmt.usd(rep.listing_usd), "yellow", "bold"), window))
+    print("  Loaded bodies: {} carried through their sessions ≈ {}{}".format(
+        f"{sum(r.invocations for r in rep.rows if r.carried_usd):,} injections", c(fmt.usd(rep.body_usd), "yellow", "bold"),
+        " · {} repeat injections in the same session ≈ {}".format(rep.repeats, fmt.usd(rep.repeat_usd)) if rep.repeats else ""))
+    print()
+    rows = [["skill", "source", "listing", "body", "invoked", "sessions", "body carried", "repeats"]]
+    for r in rep.rows:
+        rows.append([r.name[:30], r.source, fmt.tok(r.desc_tokens), fmt.tok(r.body_tokens),
+                     str(r.invocations) if r.invocations else c("never", "grey"), str(r.sessions) if r.sessions else "",
+                     fmt.usd(r.carried_usd) if r.carried_usd else "", str(r.repeats) if r.repeats else ""])
+    for r in rep.unlisted.values():
+        rows.append([r.name[:30], r.source, c("?", "grey"), fmt.tok(r.body_tokens), str(r.invocations), str(r.sessions),
+                     fmt.usd(r.carried_usd), str(r.repeats) if r.repeats else ""])
+    print(fmt.table(rows, "llrrrrrr"))
+    print()
+    if rep.unused:
+        by_source: dict = {}
+        for r in rep.unused:
+            by_source.setdefault(r.source, []).append(r.name)
+        print("  Never invoked in the window: {} skills, {} tokens of listing ≈ {} / {}".format(
+            len(rep.unused), fmt.tok(sum(r.desc_tokens for r in rep.unused)), c(fmt.usd(rep.unused_usd), "green", "bold"), window))
+        for source, names in sorted(by_source.items(), key=lambda kv: -len(kv[1])):
+            hint = disable_hint(source)
+            print("    {:<14s} {}{}".format(source, ", ".join(names), c("  → " + hint, "grey") if hint else ""))
+    big = [r for r in rep.rows if r.carried_usd >= 1 and r.body_tokens >= 4_000]
+    if big:
+        print("  Large bodies: " + "; ".join("{} ({} tokens, {})".format(r.name, fmt.tok(r.body_tokens), fmt.usd(r.carried_usd)) for r in big[:4]))
+        print(c("    Move reference sections into files the skill reads on demand (progressive disclosure), or run the step "
+                "that needs the skill in a subagent so the text stays out of the main context.", "grey"))
+    if rep.repeats:
+        print(c("  Repeat injections: `kvleak refine` proposes a one-line rule against invoking a loaded skill again.", "grey"))
+    print(c("  Bundled skills ship with Claude Code and cannot be removed; everything else can. Descriptions are tokens ≈ chars/4; "
+            "the listing cost assumes every session lists every skill.", "grey"))
     return 0
 
 
@@ -1192,6 +1259,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="how much history before the split to compare against (default 30d)")
     pr.add_argument("--json", action="store_true")
     pr.set_defaults(func=cmd_probe)
+
+    sk = sub.add_parser("skills", help="what the skill listing costs on every call, and what loaded skill bodies cost to carry")
+    _add_common(sk)
+    sk.add_argument("--json", action="store_true")
+    sk.set_defaults(func=cmd_skills)
 
     ka = sub.add_parser("keepalive", help="how many keep-alive pings your own idle pattern justifies")
     _add_common(ka)

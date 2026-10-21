@@ -144,6 +144,7 @@ Numbers are the maintainer's 30 days; method and reproduction in
 | `kvleak diet` | What filled the context: shell output 29%, scripts sent to the shell 21%, thinking 14%, file reads 4%; the costliest single items named | 114 long tool loops cost $351 to re-read; in subagents −$319 |
 | `kvleak hooks --install` | Claude Code hooks that keep long shell output out of the context (head + tail + error lines + a path) and archive everything a compaction drops, so `kvleak recall` can find it | accuracy 1.00 in 72 benchmark runs, −16% on long-output tasks |
 | `kvleak refine --apply` | Evidence-gated context-hygiene rules for `CLAUDE.md`, dollar figure written into each; `--probe` later shows which rules changed behaviour | 5 rules covering ≈$640 / 30 d |
+| `kvleak skills` | Every skill's description rides in the cached prefix of every call; its body is carried until the next compaction once invoked. Prices the listing, names the skills never invoked (and how to turn each off), prices each loaded body and repeat injections | 12 of 19 skills never invoked: $153 / 30 d of listing |
 | `kvleak keepalive` | How many keep-alive pings your own pauses justify before giving up, overall and by time of day; feeds [cache-refresher](https://github.com/olddonkey/cache-refresher) | 5 pings worth $337; lunch pauses return 25%, 6–8 am ones 86% |
 | `kvleak pointer`, `--fail-over`, `--path` | Multi-agent hand-off pointers, a CI gate on leak share, any JSONL with usage counters (Anthropic, OpenAI, Gemini keys) | [playbook](docs/playbook.md) for swarms |
 

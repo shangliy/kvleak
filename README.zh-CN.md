@@ -130,6 +130,7 @@ $ kvleak tune
 | `kvleak diet` | 上下文是被什么填满的：shell 输出 29%、发给 shell 的脚本 21%、思考 14%、文件读取 4%；点名最贵的单项 | 114 个长工具循环重读历史花了 $351，放进子 Agent −$319 |
 | `kvleak hooks --install` | Claude Code hook：长 shell 输出不进上下文（头、尾、报错行、完整路径），压缩丢掉的全部归档，`kvleak recall` 能找回 | 72 次 benchmark 准确度 1.00，长输出任务 −16% |
 | `kvleak refine --apply` | 有证据门槛的上下文卫生规则写进 `CLAUDE.md`，每条附金额；之后 `--probe` 看哪条真的改变了行为 | 5 条规则覆盖 ≈$640 / 30 天 |
+| `kvleak skills` | 每个技能的描述都在每次调用的缓存前缀里，调用过的技能正文会一直带到下次压缩。算出列表的花费、点名从未调用的技能和各自的关闭方法、每个已加载正文的携带成本和同会话重复注入 | 19 个技能里 12 个从未调用：列表花费 $153 / 30 天 |
 | `kvleak keepalive` | 从你自己的停顿学出保活 ping 几次再放弃才划算，整体和分时段；预算交给 [cache-refresher](https://github.com/olddonkey/cache-refresher) | 5 次 ping 值 $337；午饭停顿 25% 回来，早 6–8 点 86% |
 | `kvleak pointer`、`--fail-over`、`--path` | 多 Agent 指针交接、按漏损比例做 CI 门禁、任何带 usage 字段的 JSONL（Anthropic / OpenAI / Gemini） | Swarm 见[手册](docs/playbook.md) |
 

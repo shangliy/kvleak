@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 (2026-10-21)
+
+- `kvleak skills`: what the skill listing costs on every call (every SKILL.md's description is in the cached
+  prefix of every session: user, synced, enabled-plugin and bundled skills), which skills were never invoked in
+  the window and how to turn each off, and what each loaded skill body cost to carry until the next compaction,
+  including repeat injections of a skill already in the context. `--json`.
+- `kvleak diet` classifies injected skill bodies as their own kind; `kvleak whatif` gains an "Unused skills off"
+  row; `kvleak refine` proposes a "skills-once" rule when repeat injections cost enough.
+
 ## 0.9.1 (2026-10-21)
 
 - `kvleak statusline --install` now also sets `refreshInterval` (default 5 s, `--refresh N`, `0` for events

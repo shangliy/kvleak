@@ -202,6 +202,43 @@ step re-reads the whole context; a script would read it once. On the same
 history: 493 chains, 2,235 of 9,924 calls, up to −$160 as scripts. Calls, not
 tokens, are the bill.
 
+## Skills: the listing you pay for on every call, and the bodies you carry
+
+Every skill Claude Code can see (your `~/.claude/skills`, synced skills, enabled
+plugins, the bundled ones) has its name and description in the system prompt of
+every session. That is part of the cached prefix: written at each session start,
+read on every call, whether or not anyone invokes the skill. Once invoked, a
+skill's whole SKILL.md is injected into the context and carried until the next
+compaction; invoking it again injects it again.
+
+```text
+$ kvleak skills
+
+  kvleak skills · 19 skills listed · 24,780 sessions · 40,258 model calls over the last 30d
+  Listed in every call: 3.3k tokens of skill descriptions ≈ $258.80 / 30d (written at each session start, read on every call)
+  Loaded bodies: 11 injections carried through their sessions ≈ $5.02
+
+  skill                     source  listing   body  invoked  sessions  body carried  repeats
+  niw-petition              user        176   5.3k        4         4        $0.791
+  pptx                      synced      240   7.1k        1         1        $0.322
+  …
+  xlsx                      synced      238   2.1k    never
+  deep-research             synced      142   3.3k    never
+
+  Never invoked in the window: 12 skills, 1.9k tokens of listing ≈ $152.75 / 30d
+    synced         built-in-browser, chrome-browser, computer-use, …  → unsync it in claude.ai → Settings → Skills
+    user           find-skills, glowmotion, llm-journey  → move the folder out of ~/.claude/skills
+```
+
+The listing is the bigger number for most people: it is small per call but paid
+on every call and written at every session start, including every one-shot
+`claude -p` run. The body cost is what `diet` now shows as "Skill bodies"; the
+levers there are progressive disclosure (keep SKILL.md short, put references in
+files the skill reads when needed), loading a large skill inside a subagent, and
+not invoking a skill that is already in the context (`refine` proposes that rule
+when repeats cost enough). `whatif` carries the unused-listing figure as
+"Unused skills off". `--json` for scripts.
+
 ## Borrowed from REPL harnesses: hooks, recall, refine
 
 Harnesses that give the model a persistent REPL instead of a tool list

@@ -102,6 +102,29 @@ $ kvleak diet --all
 （思考不到 200 token、回复不到 300 字符）。每一步都把整个上下文重读一遍，而一段脚本只读一次。同一份历史上：
 493 条链，2,235 / 9,924 次调用，合成脚本最多省 $160。**账单是按调用次数算的，不是按 token。**
 
+## 技能：每次调用都在付的列表，和调用后一直带着的正文
+
+Claude Code 能看到的每个技能（`~/.claude/skills`、同步技能、启用的插件、自带技能）的名字和描述都在每个会话的系统提示里。
+这是缓存前缀的一部分：每次会话启动写一次，之后每次调用读一次，不管有没有人调用它。技能一旦被调用，整份 SKILL.md
+注入上下文，一直带到下次压缩；再调一次就再注入一次。
+
+```text
+$ kvleak skills
+
+  kvleak skills · 19 skills listed · 24,780 sessions · 40,258 model calls over the last 30d
+  Listed in every call: 3.3k tokens of skill descriptions ≈ $258.80 / 30d
+  Loaded bodies: 11 injections carried through their sessions ≈ $5.02
+
+  Never invoked in the window: 12 skills, 1.9k tokens of listing ≈ $152.75 / 30d
+    synced         built-in-browser, chrome-browser, computer-use, …  → unsync it in claude.ai → Settings → Skills
+    user           find-skills, glowmotion, llm-journey  → move the folder out of ~/.claude/skills
+```
+
+对大多数人列表是更大的那笔：单次很小，但每次调用都读、每次会话启动都写，包括每一次一次性的 `claude -p`。
+正文的花费在 `diet` 里以 "Skill bodies" 一类显示；对应的杠杆是渐进披露（SKILL.md 保持短，参考资料放到技能按需读的文件里）、
+把大技能放到子 Agent 里加载、不重复调用已在上下文中的技能（重复注入花得够多时 `refine` 会提出这条规则）。
+`whatif` 里对应 "Unused skills off" 一行。`--json` 给脚本用。
+
 ## 从 REPL 型 harness 借来的三件事：hooks、recall、refine
 
 给模型一个常驻 REPL 而不是工具列表的 harness（[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)）把工具输出

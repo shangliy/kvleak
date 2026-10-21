@@ -286,3 +286,27 @@ call and Bash result tokens per call (§8). Change is `(after − before) /
 before`. The 30-day projection is `(input per call before − after) × after
 calls × 30 / after days`. Nothing is replayed; both sides are what was
 billed.
+
+## 14. Skills: the listing and the bodies
+
+Claude Code lists every available skill (name + description) in the system
+prompt of every session: user skills under `~/.claude/skills`, synced skills,
+skills of enabled plugins (`enabledPlugins` in settings.json) and the ones
+bundled with Claude Code. `kvleak skills` reads each SKILL.md, estimates the
+description at chars/4 and prices the sum as always-listed text: written at
+each transcript's first call at that call's TTL write price, read at the read
+price on every later call. Skills never invoked in the window get the same
+pricing on their share of the listing; that is the "Unused skills off" row in
+`whatif`.
+
+When a skill is invoked its SKILL.md is injected as a meta user message
+beginning `Base directory for this skill:`. `diet` classifies that block as a
+skill body; `skills` prices it like any other block: a cache write on entry,
+then re-read on every call until the next compaction at r_eff. A second
+injection of the same skill in one session is counted as a repeat; `refine`
+proposes the "skills-once" rule when repeats cost at least the gate.
+
+Bodies are only scanned in interactive sessions and subagents; one-shot runs do
+not invoke skills. The listing estimate assumes every session lists every
+skill, which is true for user, synced and plugin skills and approximately true
+for bundled ones.

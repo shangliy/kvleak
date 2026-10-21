@@ -33,7 +33,9 @@ USER_KIND = "your messages"
 TEXT_KIND = "assistant text"
 THINKING_KIND = "thinking"
 SYSTEM_KIND = "system prompt & tools"
-PLAIN_KINDS = (USER_KIND, TEXT_KIND, THINKING_KIND, SYSTEM_KIND)  # everything else is "<Tool> results"
+SKILL_KIND = "skill bodies"  # a SKILL.md injected by the Skill tool, carried until the next compaction
+SKILL_MARKER = "Base directory for this skill:"
+PLAIN_KINDS = (USER_KIND, TEXT_KIND, THINKING_KIND, SYSTEM_KIND, SKILL_KIND)  # everything else is "<Tool> results"
 INPUT_SUFFIX = " inputs"  # "Bash inputs": what the model sent to the tool
 LONG_TURN = 20  # calls; a turn this long is a loop worth moving to a subagent
 SUBAGENT_START = 20_000  # context a fresh subagent starts with
@@ -184,6 +186,12 @@ def _first_line(text: str) -> str:
     return text.splitlines()[0][:48] if text else ""
 
 
+def skill_name(text: str) -> str:
+    """'niw-petition' from 'Base directory for this skill: /home/me/.claude/skills/niw-petition ...'."""
+    first = text.splitlines()[0][len(SKILL_MARKER):].strip().split()[0] if text.strip() else ""
+    return os.path.basename(first.rstrip("/")) or "?"
+
+
 def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02) -> Diet:
     pending: List[Block] = []
     blocks: List[Block] = []
@@ -284,9 +292,7 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                 isinstance(p, dict) and p.get("type") == "tool_result" for p in content)
             if not is_tool_result and not d.get("isMeta"):
                 turn = None  # a new request from the user starts a new turn
-            if isinstance(content, str):
-                pending.append(Block(USER_KIND, _first_line(content), call, len(content) / CHARS_PER_TOKEN))
-                continue
+            texts = [content] if isinstance(content, str) else []
             for part in content if isinstance(content, list) else []:
                 if not isinstance(part, dict):
                     continue
@@ -295,7 +301,11 @@ def read_diet(path: str, price: Optional[Price] = None, miss_rate: float = 0.02)
                     est, image = _content_est(part.get("content"))
                     pending.append(Block(name, _label(name, inp), call, est, is_image=image))
                 elif part.get("type") == "text":
-                    text = part.get("text") or ""
+                    texts.append(part.get("text") or "")
+            for text in texts:
+                if d.get("isMeta") and text.startswith(SKILL_MARKER):
+                    pending.append(Block(SKILL_KIND, skill_name(text), call, len(text) / CHARS_PER_TOKEN))
+                else:
                     pending.append(Block(USER_KIND, _first_line(text), call, len(text) / CHARS_PER_TOKEN))
     price = price or price_for(model)
     r_eff = price.read_mult + miss_rate * (price.write_1h_mult - price.read_mult)
@@ -358,6 +368,8 @@ class Aggregate:
     chain_saving_usd: float = 0.0
     chain_examples: List[Tuple[str, Chain]] = field(default_factory=list)
     carry_usd: float = 0.0
+    skill_repeats: int = 0  # a skill body injected again in a session that already had it
+    skill_repeat_usd: float = 0.0
 
 
 def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Aggregate:
@@ -395,6 +407,14 @@ def aggregate(transcripts: Iterable[Transcript], miss_rate: float = 0.02) -> Agg
             agg.chain_calls += ch.calls
             agg.chain_saving_usd += ch.saving_usd
         agg.chain_examples.extend((d.session_id, ch) for ch in d.chains[:3])
+        seen_skills = set()
+        for b in d.blocks:
+            if b.kind != SKILL_KIND:
+                continue
+            if b.label in seen_skills:
+                agg.skill_repeats += 1
+                agg.skill_repeat_usd += b.carry_usd + b.entry_usd
+            seen_skills.add(b.label)
     agg.kinds = dict(sorted(agg.kinds.items(), key=lambda kv: -kv[1]["carry_usd"]))
     agg.top.sort(key=lambda sb: -sb[1].carry_usd)
     agg.top = agg.top[:10]
@@ -420,6 +440,9 @@ TIPS = {
                    "`kvleak tune` set the auto-compact window.",
     SYSTEM_KIND: "Every session and subagent starts by paying for this. Trim CLAUDE.md, drop MCP servers you do not "
                  "use, and keep tool schemas deferred (ENABLE_TOOL_SEARCH).",
+    SKILL_KIND: "A skill's SKILL.md is carried until the next compaction. Move its reference sections into files the "
+                "skill reads on demand, load a big skill inside a subagent, and never invoke one twice in a session. "
+                "`kvleak skills` prices each.",
     "Agent": "Subagent reports are small; the cost is in how many you run. Reuse one with SendMessage instead of "
              "spawning again.",
     "WebFetch": "Ask the fetch for the one fact you need; a page summary is much smaller than the page.",

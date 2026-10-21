@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .diet import TEXT_KIND, Aggregate
+from .diet import SKILL_KIND, TEXT_KIND, Aggregate
 
 BEGIN = "<!-- kvleak:begin"
 END = "<!-- kvleak:end -->"
@@ -39,6 +39,9 @@ RULE_TEXT = {
                       "repetitive files with a script instead of writing them out literally.",
     "terse-in-loops": "Narration: inside tool loops keep status to one line and put reports in files; everything you say "
                       "is re-read on every later call.",
+    "skills-once": "Skills: invoke a skill once per session; if its instructions are already in the context, do not call "
+                   "the Skill tool for it again. When only one step needs a large skill, run that step in a subagent so "
+                   "the skill text stays out of the main conversation.",
 }
 
 
@@ -59,11 +62,13 @@ def metrics(agg: Aggregate) -> Dict[str, float]:
     bash_in = agg.kinds.get("Bash inputs", {"tokens": 0.0})
     write_in = agg.kinds.get("Write inputs", {"tokens": 0.0})
     text = agg.kinds.get(TEXT_KIND, {"tokens": 0.0})
+    skill = agg.kinds.get(SKILL_KIND, {"tokens": 0.0})
     return {
         "bash_result_tokens_per_result": bash["tokens"] / max(bash["count"], 1),
         "bash_input_share": bash_in["tokens"] / total,
         "write_input_share": write_in["tokens"] / total,
         "text_share": text["tokens"] / total,
+        "skill_body_share": skill["tokens"] / total,
         "long_turn_call_share": agg.long_turn_calls / calls,
         "chain_call_share": agg.chain_calls / calls,
         "calls_per_turn": calls / max(agg.turns, 1),
@@ -76,6 +81,7 @@ METRIC_LABEL = {
     "bash_input_share": "share of context that is scripts sent to Bash",
     "write_input_share": "share of context that is Written files",
     "text_share": "share of context that is reply text",
+    "skill_body_share": "share of context that is skill bodies",
     "long_turn_call_share": "share of calls inside 20+ call loops",
     "chain_call_share": "share of calls inside mechanical chains",
     "calls_per_turn": "calls per request",
@@ -126,6 +132,12 @@ def propose(agg: Aggregate, bash_cap_saving: float, min_usd: float = 5.0) -> Lis
             "terse-in-loops", RULE_TEXT["terse-in-loops"],
             "reply text was {:.0%} of the context, carried for {}".format(text["tokens"] / total, _usd(text["carry_usd"])),
             text["carry_usd"] * 0.5, "text_share"))
+    if agg.skill_repeat_usd >= min_usd:
+        rules.append(Rule(
+            "skills-once", RULE_TEXT["skills-once"],
+            "{} repeat invocations of a skill already in the context, carried for {}".format(
+                agg.skill_repeats, _usd(agg.skill_repeat_usd)),
+            agg.skill_repeat_usd, "skill_body_share"))
     return sorted(rules, key=lambda r: -r.saving_usd)
 
 
