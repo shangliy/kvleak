@@ -1,17 +1,18 @@
-# 10 tweets
+# 10 standalone tweets
 
-Each one stands alone (≤ 280 chars). Post #1 first, then one or two a day. Attach the report
-screenshot (docs/assets/report.png) or a statusline GIF where noted.
+Each ≤ 280 chars and stands alone. Post the launch thread (en.md) first and pin it,
+then one of these a day. Attach docs/assets/demo.gif, report.png, or a statusline
+recording where noted.
 
 ---
 
-**1 · Hook (pin this)**
-My Claude Code session had a 99.0% cache hit rate.
-It still leaked $82 to cache rebuilds.
+**1 · Hook**
+My Claude Code cache hit rate over 30 days: 95.4%.
+Input spend that still leaked to cache rebuilds: 20.7%.
 
 Hit rate counts tokens. Your bill counts misses × context size.
 
-I built a tool that shows the real number: `uvx kvleak`
+`uvx kvleak` shows the real number in 3 seconds.
 github.com/shangliy/kvleak
 
 ---
@@ -19,9 +20,9 @@ github.com/shangliy/kvleak
 **2 · The asymmetry**
 Prompt caching math nobody shows you:
 
-200k-token context, 1h cache
-• one hit: $0.05 on Fable 5.1
-• one miss: $3.95
+200k context, 1h cache, Fable 5.1
+• one hit: $0.05
+• one rebuild: $3.95
 
 One miss = 80 hits. Newer models make reads cheaper, so every miss hurts *more*.
 
@@ -32,82 +33,68 @@ One miss = 80 hits. Newer models make reads cheaper, so every miss hurts *more*.
 **3 · The 2% stat**
 I audited 30 days of my own Claude Code transcripts.
 
-2.2% of model calls carried 54% of all uncached input.
+2% of model calls carried more than half of all uncached input.
 
-Your cache isn't failing often. It's failing *big*.
-
-`uvx kvleak --since 30d` 📊 [attach report.png]
+Your cache isn't failing often. It's failing *big*. [attach report.png]
 
 ---
 
-**4 · Lunch is expensive**
-82% of my prompt-cache leak came from walking away.
+**4 · Tokens ≠ cost**
+"60–90% fewer tokens" tools shrink what the context carries. Carrying is paid at cache-read price, the cheapest line on the bill.
 
-Claude Code now caches with a 1h TTL, so the 5-min expiry isn't the problem. Lunch, meetings and overnight are. Median gap before a miss: 2.8 hours.
+2,848 billed Claude Code runs: −38% tool output, +6.8% cost (arXiv 2607.12161).
 
-Real case: idle 84 min → $8.92 rebuild. One message at minute 59 → $0.11.
-
----
-
-**5 · Statusline (attach GIF)**
-I put a cache countdown in my Claude Code status bar:
-
-◕ cache 3:41 · 452k ctx · rebuild $9.04 · ⚠ /compact saves ~$84
-
-When the ring is about to empty, one short message resets it for a cache read.
-
-`uvx kvleak statusline --install`
+`kvleak whatif` replays each tool's promise on *your* bill.
 
 ---
 
-**6 · Compaction surprise**
-Counter-intuitive: a big context costs you on every call, even when it hits.
+**5 · Four settings (attach demo.gif)**
+Claude Code already has the settings that fix most of the leak: compaction window, cache TTLs, idle compaction, Bash output cap. Defaults tuned for nobody.
 
-450k tokens on Opus 5.5 ≈ $0.17 per call just to carry (cache read + miss risk).
-/compact costs ≈ $0.31 once → pays off after 2 calls.
-
-`kvleak advise` tells you when.
+`kvleak tune` replays your 30 days under every value. `--apply` writes the winners. −45% input spend on mine.
 
 ---
 
-**7 · Backtest**
-I replayed 30 days of my sessions with a compaction advisor in the loop. It only saw the past at each step.
+**6 · Lunch is expensive**
+69% of my prompt-cache leak came from walking away.
 
-Auto-compact at 200k instead of the default ~967k:
-→ ~3 compactions per session
-→ −58% input spend
+Claude Code caches for 1h now, so the expensive gaps are lunch, meetings, overnight.
 
-Claude Code has the setting. `kvleak tune --apply` picks the value from your own history and writes it.
+Idle 84 min → $8.92 rebuild. One message at minute 59 → $0.11.
 
 ---
 
-**8 · Multi-agent**
-Running agent swarms? Three things multiply your token bill:
+**7 · Statusline (attach statusline recording)**
+A cache countdown in the Claude Code status bar:
 
-1. KV caches never cross models
-2. A log pasted on a shared board is re-read by every agent, every turn (O(N²))
-3. Every fresh subagent pays ~28k tokens of cold-start prefill
+● cache 59:47 · 249k ctx · rebuild $1.99 · ⚠ /compact saves ~$9.42
 
-The playbook: github.com/shangliy/kvleak/blob/main/docs/playbook.md
+Ticks while you read. Flags when carrying the context costs more than shrinking it.
 
----
-
-**9 · Pointer trick**
-The cheapest multi-agent optimization I know: stop pasting logs.
-
-`kvleak pointer build.log --status FAIL`
-→ ~60 tokens: {path, sha256, lines, tail}
-
-Only the agent fixing the build opens the file. In a 6-worker simulation: −62% input cost from this alone.
+`kvleak statusline --install`
 
 ---
 
-**10 · CTA / CI**
+**8 · Keep-alive budget**
+Keep-alive pings keep the cache warm, but each one costs a cache read, and most of my lunch pauses never come back (75%).
+
+`kvleak keepalive` learns from your own pauses how many pings pay before giving up, by time of day. Mine: 5 overall, 4 at lunch, 11 at night.
+
+---
+
+**9 · Did it help?**
+The question every optimizer dodges.
+
+`kvleak tune --apply` records the day. A week later `kvleak probe` contrasts your own sessions before vs after: input per call, leak share, compactions. Measured on what was billed, not replayed.
+
+---
+
+**10 · CTA**
 kvleak:
-• zero dependencies, no API key, no network
-• reads Claude Code + any JSONL with token usage (OpenAI/Gemini-style too)
-• `--fail-over 15` turns it into a CI gate for agent jobs
+• zero deps, no API key, no network
+• reads Claude Code, Codex CLI, Gemini CLI, OpenCode
+• `--fail-over 15` makes it a CI gate for agent jobs
 
 3 seconds to find out what your agent really costs:
 `uvx kvleak`
-github.com/shangliy/kvleak
+Post yours: github.com/shangliy/kvleak/issues/1
