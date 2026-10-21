@@ -1,0 +1,39 @@
+TITLE (79 chars, paste into the "title" field):
+Show HN: kvleak – my Claude Code cache hit rate was 95%, a fifth of input spend still leaked
+
+URL (paste into the "url" field):
+https://github.com/shangliy/kvleak
+
+TEXT (paste into the "text" field exactly as below; HN joins adjacent lines into one paragraph, so every bullet is separated by a blank line on purpose):
+----8<----
+Prompt caching is priced asymmetrically: a cache hit costs 0.1x the input price (0.025x on the newest models), a rebuild 1.25–2x. One miss on a 200k context is worth about 80 hits, so a 95% hit rate can hide a lot of money.
+
+kvleak reads the session files Claude Code (and Codex CLI, Gemini CLI, OpenCode) already keep on disk, labels every miss (idle gap past the TTL, prefix change, model switch, compaction, cold start, subagent cold start) and prices only the avoidable part. No API key, no network, zero dependencies: `uvx kvleak`.
+
+On my own 30 days (101 sessions, 58k model calls):
+
+- 95.4% hit rate, yet 20.7% of input spend went to cache rebuilds
+
+- 2% of calls carried more than half of all uncached input
+
+- 69% of the leak was idle gaps: lunch, meetings, overnight (the 1h TTL)
+
+- 44% of the whole bill was cache *writes*, not reads or output
+
+The thing I did not expect: tool-output compressors (rtk and friends) shrink what the context carries, and carrying is paid at the cache-read price, the cheapest line on the bill. A recent study of 2,848 billed Claude Code runs found a 38% cut in tool output raised cost 6.8% (arXiv 2607.12161). `kvleak whatif` replays each tool's promise on your own bill as an upper bound; on mine rtk's low end is worth 7% and four Claude Code settings are worth 26%.
+
+Those settings exist already (auto-compact window, cache TTLs, idle compaction, Bash output cap), just with defaults tuned for nobody. `kvleak tune` replays your last 30 days under every value and `--apply` writes the winners: −45% of input spend on mine, mostly from compacting at 200k instead of ~967k. A 72-run A/B benchmark on Opus 5.5 scored 1.0 in every arm, so no accuracy cost that I could measure. A week after applying, `kvleak probe` contrasts your own sessions before vs after, measured on what was billed rather than replayed.
+
+Also in the box: a statusline with a live TTL countdown, hooks that keep long shell output out of the context and make compaction lossless, and a keep-alive budget learned from when you actually come back from pauses.
+
+Two-minute video of the whole argument, numbers and commands: https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4
+
+I would like other people's numbers; the audit is three seconds and local. There is an issue for that: https://github.com/shangliy/kvleak/issues/1
+----8<----
+
+FIRST COMMENT (post it yourself right after submitting; HN readers expect the author in the thread):
+----8<----
+Author here. The one-line version: a hit is 0.1x, a rebuild is 2x on the 1h TTL, so the bill is set by the 2% of calls that miss on a big context, not by the 98% that hit.
+
+Happy to answer anything about the method. Every number in the post is reproducible from docs/benchmarks.md, and the audit never leaves your machine (5k lines of stdlib Python, no network imports). If you run it, the cause table is the interesting bit: I'd bet most people's #1 is the same idle-gap line as mine, but I only have one data point, which is why issue #1 exists.
+----8<----
