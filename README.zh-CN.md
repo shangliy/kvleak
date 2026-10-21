@@ -86,6 +86,9 @@ $ kvleak tune
   Write these to ~/.claude/settings.json: kvleak tune --apply
 ```
 
+一周后 `kvleak probe` 给出应用前后的真实变化：你自己交互式会话里每次调用的输入花费、漏损占比、上下文大小、
+压缩次数、shell 输出，以及这个差距折算成 30 天是多少。按实际计费算，不是回放。
+
 **3. 实时看缓存。** `kvleak statusline --install` 在 Claude Code 状态栏放一个 TTL 倒计时，
 并在"带着这么大的上下文比压缩它更贵"的时候提醒你：
 
@@ -102,6 +105,7 @@ $ kvleak tune
 
 | | | |
 |---|---|---|
+| `kvleak probe` | 到底有没有省？以 `tune --apply` / `hooks --install` / `refine --apply` 的那天为界，对比前后每次调用的输入花费、漏损占比、上下文大小、压缩次数、shell 输出，并折算成 30 天的数 | 你自己的前后对比，不是回放 |
 | `kvleak advise` | **现在**该 `/compact` 还是写交接文档换新会话，几次调用后回本 | 回测中输入花费 −58% |
 | `kvleak diet` | 上下文是被什么填满的：shell 输出 29%、发给 shell 的脚本 21%、思考 14%、文件读取 4%；点名最贵的单项 | 114 个长工具循环重读历史花了 $351，放进子 Agent −$319 |
 | `kvleak hooks --install` | Claude Code hook：长 shell 输出不进上下文（头、尾、报错行、完整路径），压缩丢掉的全部归档，`kvleak recall` 能找回 | 72 次 benchmark 准确度 1.00，长输出任务 −16% |

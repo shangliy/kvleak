@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0 (2026-10-21)
+
+- `kvleak probe`: did it help? `tune --apply`, `hooks --install` and `refine --apply` now record when they ran;
+  `probe` splits your interactive sessions at that moment (or `--at DATE`) and contrasts input spend per call,
+  whole bill per call, leak share, context per call, carried cost, compactions per session and Bash result
+  tokens before vs after, with a 30-day projection at the after-side call rate. Measured on what was billed,
+  not replayed. `--json` for scripts.
+
 ## 0.8.0 (2026-10-21)
 
 - Reads **Codex CLI** (`~/.codex/sessions`), **Gemini CLI** (`~/.gemini/tmp/*/chats`) and **OpenCode**

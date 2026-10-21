@@ -273,3 +273,16 @@ the output price. The `tune` row is §7's total. These are upper bounds: they
 ignore the extra turns the model spends re-fetching trimmed text, which the
 paired measurements in arXiv 2607.12161 found large enough to cancel the
 saving.
+
+## 13. Probe (`kvleak probe`)
+
+`tune --apply`, `hooks --install` and `refine --apply` append `{what, at}` to
+`~/.cache/kvleak/applied.json`. `probe` takes the earliest `at` (or `--at`),
+keeps interactive sessions only (≥5 calls, not subagents), assigns each to
+the side its first call falls on, and computes per side: input spend and
+whole bill per call (§1 costs), leak share (§4), mean prompt size per call,
+compactions per session (`after_compaction` flags), diet's carried cost per
+call and Bash result tokens per call (§8). Change is `(after − before) /
+before`. The 30-day projection is `(input per call before − after) × after
+calls × 30 / after days`. Nothing is replayed; both sides are what was
+billed.

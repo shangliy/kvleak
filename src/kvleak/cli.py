@@ -37,7 +37,7 @@ from .pricing import TTL_1H, TTL_5M, price_for
 from .pricing import table as price_table
 from .sources import Transcript, default_claude_root, discover, load, load_many
 
-SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "whatif", "breakeven",
+SUBCOMMANDS = {"audit", "session", "advise", "tune", "diet", "hook", "hooks", "recall", "refine", "keepalive", "whatif", "probe", "breakeven",
                "statusline", "pointer", "models"}
 TUNE_KEYS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl", "bashOutputMaxChars")
 TUNE_ENV = ("CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",)
@@ -622,6 +622,68 @@ def cmd_whatif(args) -> int:
     return 0
 
 
+def cmd_probe(args) -> int:
+    """Before/after the day kvleak's changes were applied."""
+    from .probe import MIN_SESSIONS, contrast, first_applied, load_events, projected_saving_30d, snapshot, to_dict
+
+    c = fmt.c
+    events = load_events()
+    at = args.at if args.at is not None else first_applied(events)
+    if at is None:
+        print("kvleak: nothing recorded yet. Run kvleak tune --apply / hooks --install / refine --apply, or pass "
+              "--at 2026-10-21 to split your history by hand.", file=sys.stderr)
+        return 1
+    before_s = args.before if args.before is not None else 30 * 86400
+    now = time.time()
+    transcripts = load_all(_default_paths(args), args.format, at - before_s, args.project)
+    miss = _profile(args).miss_rate
+    before = snapshot(transcripts, at - before_s, at, miss, args.min_miss)
+    after = snapshot(transcripts, at, now + 1, miss, args.min_miss)
+    if args.json:
+        print(json.dumps(to_dict(before, after, at, events), indent=2, sort_keys=True))
+        return 0
+    when = datetime.fromtimestamp(at, tz=timezone.utc).date()
+    applied = ", ".join("{} {}".format(e.get("what", "?"), datetime.fromtimestamp(float(e["at"]), tz=timezone.utc).date())
+                        for e in sorted(events, key=lambda e: e["at"])) or "manual split"
+    print(c("\n  kvleak probe · split at {} ({})".format(when, applied), "bold"))
+    print("  before: {} sessions, {} calls over {:.0f}d · after: {} sessions, {} calls over {:.1f}d".format(
+        before.sessions, f"{before.calls:,}", before.days, after.sessions, f"{after.calls:,}", after.days))
+    if after.sessions < MIN_SESSIONS:
+        print(c("  Too early: {} interactive session(s) since; probe wants {}. Keep working and run it again.".format(
+            after.sessions, MIN_SESSIONS), "yellow"))
+        if not after.calls:
+            return 0
+    show = {"usd": fmt.usd, "pct": fmt.pct, "tok": fmt.tok, "num": lambda v: "{:.1f}".format(v)}
+    rows = [["", "before", "after", "change"]]
+    for r in contrast(before, after):
+        d = r.delta
+        if d is None:
+            change = "–"
+        else:
+            change = "{:+.0%}".format(d)
+            change = c(change, "green" if d <= -0.1 else "red" if d >= 0.1 else "grey")
+        rows.append([r.label, show[r.kind](r.before), show[r.kind](r.after), change])
+    print()
+    print(fmt.table(rows, "lrrr"))
+    print()
+    proj = projected_saving_30d(before, after)
+    if after.calls and before.calls:
+        verb = "less" if proj >= 0 else "more"
+        print("  {} Input spend per call {} → {}: at the after-side call rate that is {} {} per 30 days.".format(
+            c("→", "green" if proj > 0 else "yellow", "bold"), fmt.usd(before.input_per_call), fmt.usd(after.input_per_call),
+            c(fmt.usd(abs(proj)), "green" if proj > 0 else "red", "bold"), verb))
+    print(c("  Interactive sessions only (no one-shot runs, no subagents); a session counts on the side its first call "
+            "falls on. Before/after on your own work, not a controlled comparison: per-call and share rows cancel "
+            "most of what changed in the work itself.", "grey"))
+    return 0
+
+
+def _record_applied(what: str) -> None:
+    from .probe import record
+
+    record(what)
+
+
 def _bash_cap_saving(agg, cap_chars: int) -> float:
     """Carried cost of the part of every Bash result beyond `cap_chars` (which would go to a file instead)."""
     cap = cap_chars / 4.0
@@ -649,7 +711,8 @@ def _apply_tune(plan: dict) -> int:
         print("  wrote {} = {}".format(k, json.dumps(v)))
     for k, v in plan["env"].items():
         print("  wrote env.{} = {}".format(k, json.dumps(v)))
-    print("  → {}  (restart Claude Code; undo with kvleak tune --reset)".format(settings))
+    print("  → {}  (restart Claude Code; undo with kvleak tune --reset · kvleak probe in a week shows the difference)".format(settings))
+    _record_applied("tune")
     return 0
 
 
@@ -863,6 +926,7 @@ def cmd_hooks(args) -> int:
               "  archive: {}\n  install: kvleak hooks --install [--max-chars 8000] [--project]".format(cache_root()))
         return 0
     settings = _write_settings(install(data, _kvleak_command(), args.max_chars), args.project)
+    _record_applied("hooks")
     print("Installed in {}:\n"
           "  PostToolUse (Bash)      results over {:,} chars go to {}/outputs/<session>/ and the model sees head + tail +\n"
           "                          error lines + the path, instead of all of it\n"
@@ -956,6 +1020,7 @@ def cmd_refine(args) -> int:
         print(c("\n  Write them under '{}' in {}: kvleak refine --apply   (project file: --local)".format(HEADING, target), "grey"))
         return 0
     apply(target, block)
+    _record_applied("refine")
     base = metrics(agg)
     save_state(rules, base, target, window)
     st = load_state() or {}
@@ -1112,6 +1177,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(wi)
     wi.add_argument("--min-window", type=parse_tokens, default=150_000, metavar="TOKENS", help=argparse.SUPPRESS)
     wi.set_defaults(func=cmd_whatif)
+
+    pr = sub.add_parser("probe", help="before/after the day kvleak's changes went in: did it save anything?")
+    _add_common(pr)
+    pr.add_argument("--at", type=parse_since, metavar="DATE", help="split here instead of the recorded apply date (2026-10-21 or 7d)")
+    pr.add_argument("--before", type=lambda v: time.time() - parse_since(v), metavar="WINDOW",
+                    help="how much history before the split to compare against (default 30d)")
+    pr.add_argument("--json", action="store_true")
+    pr.set_defaults(func=cmd_probe)
 
     ka = sub.add_parser("keepalive", help="how many keep-alive pings your own idle pattern justifies")
     _add_common(ka)

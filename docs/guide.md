@@ -422,3 +422,40 @@ the REPL-harness ideas in [Prime Agent](https://github.com/PrimeIntellect-ai/pri
 compose; keep only evidence-backed edits).
 
 MIT licensed. Contributions welcome!
+
+## Did it help? `kvleak probe`
+
+`kvleak tune --apply`, `kvleak hooks --install` and `kvleak refine --apply`
+record when they ran (`~/.cache/kvleak/applied.json`). `kvleak probe` splits
+your interactive sessions at the earliest of those moments (or at `--at
+2026-10-21`, or `--at 7d`) and contrasts both sides:
+
+```text
+$ kvleak probe --at 7d        # manual split, nothing applied yet: shows the shape, not a kvleak effect
+
+  kvleak probe · split at 2026-10-14 (manual split)
+  before: 43 sessions, 29,519 calls over 30d · after: 59 sessions, 2,397 calls over 7.0d
+
+                               before   after  change
+  input spend per call         $0.057  $0.072    +26%
+  whole bill per call          $0.067  $0.100    +49%
+  leaked share of input         23.2%   19.9%    -14%
+  context per call               193k    179k     -7%
+  carried cost per call        $0.104  $0.050    -52%
+  compactions per session         0.6     0.2    -73%
+  Bash result tokens per call     624     666     +7%
+
+  → Input spend per call $0.057 → $0.072: at the after-side call rate that is $154.10 more per 30 days.
+```
+
+Only interactive sessions count (no one-shot runs, no subagents), and a
+session belongs to the side its first call falls on. It is a before/after on
+whatever you worked on, not a controlled comparison; the per-call and share
+rows cancel most of the difference in the work itself, and the projected
+figure assumes the after-side call rate continues. `--before 14d` narrows the
+before window; `--json` for scripts. The table above is a manual split on the
+maintainer's history *before* anything was applied: the week after the split
+was spent building kvleak in many short sessions, which is why the per-call
+rows went up while the carried cost went down. That is exactly the kind of
+workload shift the caveat is about; the real probe runs a week after
+`tune --apply`.

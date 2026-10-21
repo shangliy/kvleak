@@ -94,6 +94,11 @@ $ kvleak tune
   Write these to ~/.claude/settings.json: kvleak tune --apply
 ```
 
+A week later, `kvleak probe` shows what actually changed: input spend per
+call, leak share, context per call, compactions and shell output on your own
+interactive sessions before vs after the day you applied, and what the
+difference is worth per 30 days. Measured on what was billed, not replayed.
+
 **3. Watch the cache live.** `kvleak statusline --install` puts a TTL
 countdown in Claude Code and tells you when carrying the context costs more
 than shrinking it:
@@ -112,6 +117,7 @@ Numbers are the maintainer's 30 days; method and reproduction in
 
 | | | |
 |---|---|---|
+| `kvleak probe` | Did it help? Splits your sessions at the day `tune --apply` / `hooks --install` / `refine --apply` ran and contrasts input spend per call, leak share, context per call, compactions and shell output before vs after, with a projected 30-day figure | your own before/after, no replay |
 | `kvleak advise` | Should you `/compact` or hand off to a fresh session *now*, and after how many calls it pays off | −58% input spend in backtest |
 | `kvleak diet` | What filled the context: shell output 29%, scripts sent to the shell 21%, thinking 14%, file reads 4%; the costliest single items named | 114 long tool loops cost $351 to re-read; in subagents −$319 |
 | `kvleak hooks --install` | Claude Code hooks that keep long shell output out of the context (head + tail + error lines + a path) and archive everything a compaction drops, so `kvleak recall` can find it | accuracy 1.00 in 72 benchmark runs, −16% on long-output tasks |
