@@ -1,184 +1,106 @@
 # kvleak
 
-**找出你的 AI 编程 Agent 在 Prompt Cache 上漏掉了多少钱，以及怎么堵上。**  ·  [English](README.md)
+**你的 Claude Code 缓存命中率 95% 以上，输入花费却仍有四分之一用在了缓存重建上。kvleak 告诉你漏在哪，并用一条命令堵上大部分。**  ·  [English](README.md)
 
-表面缓存命中率 90%+，账单却依然很贵？因为缓存**未命中比命中贵约 12 倍**，而且未命中虽然少、单次却很大：空闲超过 5 分钟 TTL、会话中途切模型、一次性子 Agent 冷启动……真实审计中，**约 5% 的调用吃掉了约一半的全价输入 Token**。
-
-> **缓存命中率 99.0% 的会话，照样漏了 82 美元。** 在 Claude Fable 5.1 上，一次缓存未命中的成本相当于 80 次命中。一份 30 天的真实 Claude Code 使用审计显示：2% 的调用占了一半以上的全价输入。[查看数据 →](docs/benchmarks.md)
-
-`kvleak` 直接读取本机已有的会话记录，找出每一次昂贵的缓存击穿，告诉你**为什么**发生，并折算成美元。
+[![CI](https://github.com/shangliy/kvleak/actions/workflows/ci.yml/badge.svg)](https://github.com/shangliy/kvleak/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/kvleak)](https://pypi.org/project/kvleak/)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ```bash
-uvx kvleak          # 或：pipx run kvleak  ·  pip install kvleak
+uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 ```
 
-零依赖、零配置、不需要 API Key、不联网。默认读取 `~/.claude/projects`，其他带 token usage 的 JSONL 用 `--path` 指定。
+不需要 API Key、不用配置、不联网、零依赖。它直接读 Claude Code 已经存在
+`~/.claude/projects` 里的会话记录，几秒钟出结果。订阅用户看到的美元是按
+目录价折算的，百分比就是你的限额余量。
 
-## 真实数据
+```text
+ kvleak · prompt-cache leak report
+ 81 sessions + 276 subagents + 21,977 one-shot runs · 36,915 model calls
 
-- 30 天交互式 Claude Code 会话：命中率 **97.5%**，但 **27.5%** 的输入花费用在了缓存重建上
-- 其中 **82%** 的漏损来自空闲间隔（中位数 2.8 小时；Claude Code 现在默认使用 1 小时 TTL）
-- 200k 上下文一次未命中的成本：Fable 5.1 上 **$3.95**，Opus 5.5 上 $1.56
-- 6 个 Worker 的 Swarm 模拟：指针交接 + 常驻 Worker + 锁定模型，输入成本 **−86%**
-- 压缩顾问回测：只在上下文超过 200k 时压缩（平均每个会话约 3 次），输入花费 **−58%**；只在超过 400k 时压缩（30 天共 23 次）也有 **−40%**
-- `kvleak tune --apply`：同样的 30 天，四个 Claude Code 自带的设置合计 **−$909（−45%）**
-- 机械链（连续 3 次以上 `ls`/`cat`/`grep`/小读取、中间没有真正的决策）：**493 条，占 9,924 次调用中的 2,235 次**；合成脚本最多 **−$160**
-- `kvleak refine`：5 条写进 CLAUDE.md 的规则，每条都附带证据，合计覆盖 **≈$640 / 30 天** 的可测量浪费
-- A/B benchmark（`bench/`，Opus 5.5 上 72 次 `claude -p`）：**每个 arm 准确度都是 1.00**；输出 1.7 万行和 13 万行的两个任务成本 −16% 到 −17%，四个短任务在噪音范围内（±5%）。大头要在长会话里才能省
-- `kvleak keepalive`：同样的 30 天里 323 次停顿超过了 1 小时 TTL，164 次再也没回来；"最多 ping 5 次再放弃"本可省 **$337**（最优 14 次、$413）。午饭时开始的停顿只有 25% 会回来，早上 6–8 点开始的有 86%
+  Cache hit rate    93.1%  ██████████████████████▎
+  Input spend        $2,109   caching already saved you $17,557
+  Leaked to misses  $510.50   24.2% of input spend went to cache rebuilds and cold starts
+  Dead writes       $214.72   write premium on tokens never read back (mostly one-shot `claude -p` runs)
 
-## 功能
-
-| 命令 | 作用 |
-|---|---|
-| `kvleak` | 全量审计：命中率、漏损金额、按原因拆解、最漏的会话、最贵的单次未命中、可执行建议 |
-| `kvleak --since 7d --html report.html` | 生成可分享的自包含 HTML 报告（亦支持 `--markdown` / `--json`） |
-| `kvleak session <id>` | 单个会话逐步时间线，标出每一次未命中及原因 |
-| `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89` |
-| `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
-| `kvleak tune --apply` | 用你的历史回测 Claude Code 自带的缓存设置（自动压缩窗口、缓存 TTL、空闲压缩阈值），把最省钱的值**直接写进 `settings.json`** |
-| `kvleak diet` | 拆开上下文：**到底是什么把它填满的**（工具输出、你贴的文本、模型自己的回复、系统提示词），每一块被携带了多少次、花了多少钱，并点名最贵的单项；`--all` 汇总 30 天 |
-| `kvleak hooks --install` | 装 4 个 Claude Code hook：**长 shell 输出不进上下文**（模型只看到头、尾、报错行和完整输出的路径），**压缩不再丢东西**（被压掉的全部归档，并告诉模型怎么查） |
-| `kvleak recall "<regex>"` | 搜索被压缩掉的历史。模型自己也会用它 |
-| `kvleak refine --apply` | 把**有证据的上下文卫生规则**写进 `CLAUDE.md`，每条规则都要在你自己的历史上值一个金额才会出现；之后 `--probe` 对比前后，告诉你哪条规则真的改变了行为 |
-| `kvleak keepalive` | 从你自己的停顿记录里学出**保活 ping 几次才划算**（整体和分时段），倒计时最后两分钟 statusline 会显示；把这个预算交给刷新工具（cache-refresher 的 `/cache-auto on <k>`） |
-| `kvleak breakeven 150k --idle 20m` | 单次计划停顿：保活还是放弃？按盈亏平衡点 `K_max = floor((write − read) / read)` 计算 |
-| `kvleak pointer build.log --status FAIL` | 把大文件变成约 60 Token 的「指针消息」，用于多 Agent 看板交接 |
-| `kvleak --fail-over 15` | 漏损超过输入花费的 15% 时以退出码 2 结束，可作为 CI 门禁 |
-
-## 上下文太大，什么时候该压缩？
-
-有缓存，长上下文也不是免费的：每次调用都要按读取价把整段前缀读一遍，一旦未命中还要全量重建。压缩只花一次钱，之后每次调用都更便宜：
-
-```
-回本调用次数 R* = 一次性成本 / ((C − S) · (read + 未命中率 · (write − read)))
+ Where the leak comes from
+  cause                            misses  uncached     leak  share
+  Idle gap outlived the cache TTL     134     37.9M  $353.52  69.2%  ███████████
+  New session cold start            1,364     36.0M   $79.75  15.6%  ██▍
+  Subagent cold start                 145      4.1M   $29.44   5.8%  ▉
+  Model switched mid-session            8      2.3M   $20.53   4.0%  ▋
 ```
 
-`kvleak advise` 会用你的历史数据估计会话通常还会持续多少次调用、多久未命中一次，然后告诉你现在压缩或换新会话是否划算。状态栏也会实时提示：`⚠ /compact saves ~$9.42`。这些结论只算钱：请在摘要仍能保留后续所需信息时再压缩。
+<sub>维护者自己最近 30 天的数据。你的会不一样，这正是要你自己跑一遍的原因。欢迎把你的贴到 [#1](https://github.com/shangliy/kvleak/issues/1)。</sub>
 
-## 让 Claude Code 自己来：`kvleak tune`
+## 为什么命中率会骗人
 
-Claude Code 其实能替你压缩（`autoCompactWindow`）、选缓存 TTL（`promptCacheTtl`、`subagentPromptCacheTtl`），
-还能在缓存失效前把空闲会话压缩掉（`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`）。但默认值不是为你调的。
-`kvleak tune` 用**你自己**最近 30 天的记录，把每个设置的每个候选值都回放一遍，告诉你各能省多少：
+一次缓存命中按输入价的 0.1× 计费（Fable 5.1 上是 0.025×），一次重建是 1.25× 到 2×。
+200k 上下文上的一次未命中相当于 **80 次命中**，所以 2% 的调用可以吃掉一半的全价输入，
+命中率却纹丝不动。kvleak 只把每次未命中里**本可避免**的部分算作漏损：缓存里本来就有的
+上下文，按写入价减去读取价计。
+
+## 三条命令
+
+**1. 看漏损。** `kvleak`（就是上面那张表）。`--since 7d` 限定时间，`--html report.html`
+生成可分享的报告，`kvleak session <id>` 逐次调用看一个会话。
+
+**2. 改设置。** Claude Code 自己就能替你压缩、选缓存 TTL、压缩空闲会话，但默认值不是为你
+调的。`kvleak tune` 把你最近 30 天在每个设置的每个候选值下重放一遍，`--apply` 把赢家写进
+`settings.json`（有备份，`--reset` 撤销）：
 
 ```text
 $ kvleak tune
 
   setting                                         now           best   saving / 30d  why
-  autoCompactWindow                               auto (~967k)  200k        $720.52  98 compactions over 33 sessions instead of 32 · −57.7% of input spend
-  promptCacheTtl                                  1h            1h                –  33 interactive sessions: 1h costs $1,347, 5m costs $3,231
-  subagentPromptCacheTtl                          5m            5m                –  271 subagents: 5m costs $274, 1h costs $386
-  `claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL  1h            5m          $169.11  20535 one-shot runs: 5m costs $301, 1h costs $471 · set it in the batch script
-  CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min · compacting there nets $212 at 200k, $232 at 100k
+  autoCompactWindow                               auto (~967k)  200k        $720.52  98 compactions instead of 32 · −57.7% of input spend
+  `claude -p` runs: CLAUDE_CODE_PROMPT_CACHE_TTL  1h            5m          $169.11  42% of their cache writes were never read back
+  CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS             200k          100k         $19.72  153 idle gaps ≥54 min
+  bashOutputMaxChars                              30,000        8,000        $32.54  Bash results are 29% of what entered the context
 
-  Total if applied: $740.43 per 30d  (+$169.11 from the habits above)
-  Write these to ~/.claude/settings.json: kvleak tune --apply  (undo: kvleak tune --reset)
+  Total if applied: $909 per 30d (−45% of input spend)
+  Write these to ~/.claude/settings.json: kvleak tune --apply
 ```
 
-`--apply` 会先备份 `settings.json`，`--reset` 只删掉它写入的那几个键。想保留更多细节可以用
-`--min-window 300k` 限制自动压缩的下限。审计报告里还新增了**死写入**一项：按 1 小时 TTL
-的 2 倍写入价缓存、却从来没被读回的 Token。对一次性的 `claude -p` 批处理来说这占了账单的 42%，
-所以那类任务该用 5 分钟 TTL。
-
-## 上下文到底是被什么填满的？`kvleak diet`
-
-压缩把上下文当成一整块。`kvleak diet` 把它拆开：每个工具输出、每段贴进来的文本、每条回复，都是在某次调用进入上下文、
-之后每次调用都被重读、直到被压缩掉的一块。Token 数按 API 的真实用量校准（图片按像素计价，不按 base64 长度），
-每一块都有一个**携带成本** = Token × 停留的调用次数 × 缓存读取价。
+**3. 实时看缓存。** `kvleak statusline --install` 在 Claude Code 状态栏放一个 TTL 倒计时，
+并在"带着这么大的上下文比压缩它更贵"的时候提醒你：
 
 ```text
-$ kvleak diet --all
-
-  What filled the context · 33 sessions · 9,824 calls · 20.8M tokens entered · carrying it cost $958
-  source                 items  tokens  share  biggest  carried cost
-  Bash results           7,760    6.1M  29.2%    15.9k       $297.87
-  Bash inputs            7,761    4.5M  21.5%    10.2k       $205.07
-  Thinking               6,472    3.0M  14.2%    12.4k       $140.21
-  Your messages          1,891    2.0M   9.6%    49.7k        $82.10
-  System prompt & tools     33    1.3M   6.3%    61.6k        $61.91
-  Write inputs             349    999k   4.8%    27.1k        $46.95
-  Read results             421    925k   4.4%    25.2k        $38.88
-
-  Long turns (≥20 calls before you spoke again)
-  114 turns · 4,707 calls · re-reading the history they started with cost $351.12 · in fresh subagents: −$318.66
+◕ cache 3:41 · 182k ctx · rebuild $0.89
+● cache 59:47 · 249k ctx · rebuild $1.99 · ⚠ /compact saves ~$9.42
+◔ cache 1:19 · 250k ctx · rebuild $2.00 · ⚑ ≤2 pings pay
 ```
 
-两个意外。一半的上下文是 **shell**：从 shell 回来的输出（29%）和模型发给 shell 的脚本（21%），两者都有便宜的解法
-（`tail`、脚本写进文件而不是 heredoc、`bashOutputMaxChars`——`kvleak tune` 现在会回测它）。
-另外，当前模型会把**思考一直留在上下文里直到压缩**，所以它占了重读量的 14%；但在这份历史上把 `/effort` 从 high 降到 medium 只能省 $3，
-真正的杠杆是压缩而不是 effort。最大的单项数字是**长回合**：114 个超过 20 次调用的工具循环，把它们开始时的历史重读了 4,707 次。
-把这类循环放进新的子 Agent 里跑，$319 就省下来了。
+## 盒子里还有什么
 
-`diet` 还会数**机械链**：连续 3 次以上的调用，每次只做一个 `ls`、`cat`、`grep`、`find` 或小段读取，中间没有真正的决策
-（思考不到 200 token、回复不到 300 字符）。每一步都把整个上下文重读一遍，而一段脚本只读一次。同一份历史上：
-493 条链，2,235 / 9,924 次调用，合成脚本最多省 $160。**账单是按调用次数算的，不是按 token。**
+每一项都先在你自己的历史上测量，再给建议。数字来自维护者的 30 天，方法和复现命令见
+[docs/benchmarks.md](docs/benchmarks.md)。
 
-## 从 REPL 型 harness 借来的三件事：hooks、recall、refine
-
-给模型一个常驻 REPL 而不是工具列表的 harness（[Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent)）把工具输出
-放在**变量**里：模型只打印它需要的部分，其余不进 prompt，被压缩掉的历史也仍然可以取回。Harness 自改进框架
-（[Harness²](https://github.com/google-research/harness2)）修改模型周围的文件，并且只保留有证据支持的修改。
-Claude Code 的工具模型改不了，但它的 hooks 和 `CLAUDE.md` 足够拿到这两者的大部分好处。
-
-```bash
-kvleak hooks --install      # 往 ~/.claude/settings.json 写 4 个 hook（撤销：--uninstall）
-```
-
-| hook | 做什么 |
-|---|---|
-| `PostToolUse`（Bash） | 超过 8,000 字符（`--max-chars`）的结果写进 `~/.cache/kvleak/outputs/<session>/<id>.txt`。模型看到的是开头、结尾、所有像报错的行（连同后两行）、重复行折叠成 `(×N)`，以及完整输出的路径。什么都没丢，只隔一个 `grep` |
-| `PreCompact` | 摘要替换历史之前，把记录里每一个工具结果、消息、回复追加到 `~/.cache/kvleak/history/<session>/history.jsonl` |
-| `PostCompact` | 摘要本身也存在旁边，方便看它保留了什么 |
-| `SessionStart`（compact） | 告诉模型归档存在，给它一行一个请求的地图和 `kvleak recall` 命令。压缩后它做的第一件事不再是"重新跑一遍测试看看哪里失败" |
-
-```text
-$ kvleak recall "AssertionError" --session 7ff95ce0
-#312 result Bash pytest -q tests/test_policy.py
-    > FAILED tests/test_policy.py::test_window_sweep - AssertionError: assert 98 == 96
-$ kvleak recall --show 312 | head -40
-```
-
-`kvleak refine` 是"持续 harness"的那一半。它拿 `diet` 和 `tune` 测出来的数字，给 `~/.claude/CLAUDE.md`
-（`--local` 则是 `./CLAUDE.md`）生成一小段规则。一条规则只有在它的证据在时间窗内值 `--min-usd`（默认 $5）以上时才出现，
-而且证据会写进规则里，让模型知道为什么：
-
-```text
-$ kvleak refine
-
-  5 rules with evidence from 33 sessions · 30d
-  • loops-in-subagents  ~$320 / 30d
-    Long loops: when a task will take more than ~20 tool calls (...), run it in a subagent that reports back a few lines
-    evidence: 116 loops of 20+ calls re-read 4,754 calls of history for $353; in subagents that would have been $320 less
-  • batch-steps  ~$160 / 30d
-    Mechanical steps: combine sequences of `ls`, `cat`, `grep`, `find` and small reads into one command or one script
-    evidence: 493 chains of 3+ mechanical calls (2,235 calls); as single scripts they would have saved up to $160
-  • scripts-in-files  ~$103 / 30d
-  • shell-output      ~$32 / 30d
-  • edit-not-write    ~$24 / 30d
-```
-
-`--apply` 写入这段（有备份，`--remove` 可删；每次调用约多携带 150 token），并记下当天的行为指标。
-一周后 `kvleak refine --probe` 把之后的会话和之前的做对比，每条规则对应一个指标（每次 Bash 结果的 token 数、
-机械链里的调用占比、20+ 次调用循环里的调用占比……），告诉你哪条规则的数字动了、哪条没动。这就是 Harness² 的
-probe 步骤，只不过跑在你的真实会话上而不是 benchmark 上；它说明行为有没有变，不证明是规则导致的。
-
-**这些会不会损失准确度？** `bench/` 用自动生成、自动判分的任务跑 `claude -p`，分别开关 hooks 和规则。Opus 5.5 上 72 次运行，
-每个 arm 每个任务都是满分；在 shell 输出特别长的两个任务上成本降了 16% 到 17%，短任务上没有可测量的差别。
-详见 [docs/benchmarks.md §8](docs/benchmarks.md#8-ab-benchmark-accuracy-and-cost-with-and-without-kvleak)。
-
-## 未命中原因分类
-
-| 原因 | 含义 | 修复方向 |
+| | | |
 |---|---|---|
-| 空闲超过 TTL | 离开超过 5 分钟（或 1 小时），下一条消息全量重建 | 看倒计时及时回复、批量处理、用 `kvleak keepalive` 学出的次数做保活 |
-| TTL 内前缀变化 | 时间戳、未排序 JSON、工具列表变化导致前缀击穿 | 前缀确定性：`json.dumps(..., sort_keys=True)`、静态 System Prompt |
-| 会话中途切模型 | KV Cache 按模型物理隔离，切换必然全价重算 | 每个 Worker 锁定单一模型，跨模型用文件指针交接 |
-| 历史压缩 | `/compact` 或自动压缩重写历史 | 在自然断点主动压缩一次 |
-| 冷启动 / 子 Agent 冷启动 | 新 Agent 全价加载系统提示词与工具 Schema | 复用常驻 Worker，保持 System Prompt 完全一致 |
+| `kvleak advise` | **现在**该 `/compact` 还是写交接文档换新会话，几次调用后回本 | 回测中输入花费 −58% |
+| `kvleak diet` | 上下文是被什么填满的：shell 输出 29%、发给 shell 的脚本 21%、思考 14%、文件读取 4%；点名最贵的单项 | 114 个长工具循环重读历史花了 $351，放进子 Agent −$319 |
+| `kvleak hooks --install` | Claude Code hook：长 shell 输出不进上下文（头、尾、报错行、完整路径），压缩丢掉的全部归档，`kvleak recall` 能找回 | 72 次 benchmark 准确度 1.00，长输出任务 −16% |
+| `kvleak refine --apply` | 有证据门槛的上下文卫生规则写进 `CLAUDE.md`，每条附金额；之后 `--probe` 看哪条真的改变了行为 | 5 条规则覆盖 ≈$640 / 30 天 |
+| `kvleak keepalive` | 从你自己的停顿学出保活 ping 几次再放弃才划算，整体和分时段；预算交给 [cache-refresher](https://github.com/olddonkey/cache-refresher) | 5 次 ping 值 $337；午饭停顿 25% 回来，早 6–8 点 86% |
+| `kvleak pointer`、`--fail-over`、`--path` | 多 Agent 指针交接、按漏损比例做 CI 门禁、任何带 usage 字段的 JSONL（Anthropic / OpenAI / Gemini） | Swarm 见[手册](docs/playbook.md) |
 
-## 多 Agent / 多模型
+带完整输出的全部功能：**[docs/guide.zh-CN.md](docs/guide.zh-CN.md)**。每个数字怎么算的：
+[docs/how-it-works.md](docs/how-it-works.md)。
 
-[多 Agent 缓存手册（英文）](docs/playbook.md) 介绍六层优化：单 Worker 锁定模型并用指针交接、「脚本 → 小模型 → 大模型」算力漏斗、常驻 Worker 与 TTL 窗口批处理、公共看板瘦身契约（15 行以内）、确定性前缀、按水位线主动压缩。手册里附有一段可以直接粘贴进 Swarm 指令的契约。
+## FAQ
 
-MIT 协议，欢迎贡献！
+**我的数据会被发出去吗？** 不会。只读本地文件，不联网。
+
+**我是订阅用户。** 未命中吃掉的限额余量和 API 上花掉的钱是一回事，把数字当相对权重看。
+
+**削上下文会不会让模型变笨？** A/B benchmark（`bench/`，Opus 5.5 上 72 次）每个 arm 每个任务都是满分。
+`tune` 写入的设置只在上下文超过 200k 时压缩，`--min-window` 可以调高。
+
+## 致谢
+
+倒计时的点子来自 [olddonkey/cache-refresher](https://github.com/olddonkey/cache-refresher)；
+hooks、recall、refine 借鉴了 [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) 和
+[Harness²](https://github.com/google-research/harness2)。MIT 协议。

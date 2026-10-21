@@ -2,7 +2,7 @@
 
 ## Show HN
 
-**Title:** Show HN: kvleak – my Claude Code cache hit rate was 99% and it still leaked $82
+**Title:** Show HN: kvleak – my Claude Code cache hit rate was 97%; four settings it already has cut input spend 45%
 
 **Body:**
 
@@ -22,9 +22,15 @@ Findings from 30 days of my own use:
 - 82% of the leak came from idle gaps. Claude Code now caches with the 1-hour TTL,
   so the expensive gaps are lunch, meetings and overnight. Median gap: 2.8 h.
 
-It also has a statusline with a live TTL countdown, a keep-alive break-even
-calculator (`K_max = floor((write − read) / read)`), and a playbook for multi-agent
-swarms. In a simple simulation, pointers instead of pasted logs + warm workers +
+The part that turned out to matter most: Claude Code already has the settings to
+fix this (auto-compact window, cache TTLs, idle compaction, Bash output cap), with
+defaults tuned for nobody. `kvleak tune` replays your own 30 days under every value
+and `--apply` writes the winners to settings.json: −$909 (−45% of input spend) on
+mine, most of it from compacting at 200k instead of ~967k. A 72-run A/B benchmark
+found no accuracy cost from the hooks/rules side.
+
+It also has a statusline with a live TTL countdown, a keep-alive budget learned from
+when you actually come back from pauses, and a playbook for multi-agent swarms. In a simple simulation, pointers instead of pasted logs + warm workers +
 one model per worker cut input cost by 86%.
 
 `uvx kvleak`. Zero dependencies, local only, MIT. Any JSONL with token usage works,
