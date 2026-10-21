@@ -141,6 +141,9 @@ def cmd_audit(args) -> int:
         Path(args.markdown).write_text(render_markdown(report), encoding="utf-8")
         print("Wrote {}".format(args.markdown), file=sys.stderr)
         wrote_file = True
+    if args.card:
+        _write_card(report, args.card, args.since)
+        wrote_file = True
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True, default=str))
     elif not wrote_file or sys.stdout.isatty():
@@ -150,6 +153,26 @@ def cmd_audit(args) -> int:
     if args.fail_over is not None and report.cost and report.leak / report.cost * 100 > args.fail_over:
         return 2
     return 0
+
+
+def _write_card(report, target: str, since: Optional[float]) -> None:
+    from .card import render_card, to_png
+
+    label = "last 30 days"
+    if since:
+        days = max(1, int(round((time.time() - since) / 86400)))
+        label = "last {} day{}".format(days, "s" if days != 1 else "")
+    svg_path = target[:-4] + ".svg" if target.lower().endswith(".png") else target
+    Path(svg_path).write_text(render_card(report, label), encoding="utf-8")
+    if target.lower().endswith(".png"):
+        used = to_png(svg_path, target)
+        if used:
+            print("Wrote {} (via {}) and {}".format(target, used, svg_path), file=sys.stderr)
+        else:
+            print("Wrote {}. No SVG rasteriser found (rsvg-convert, magick, inkscape or Chrome); open the SVG in a browser "
+                  "and screenshot it, or install one and rerun.".format(svg_path), file=sys.stderr)
+    else:
+        print("Wrote {}".format(svg_path), file=sys.stderr)
 
 
 def _save_profile(transcripts: List[Transcript], report) -> None:
@@ -1176,6 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--json", action="store_true", help="machine-readable output")
     a.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     a.add_argument("--markdown", metavar="FILE", help="write a Markdown summary (great for PRs / Slack)")
+    a.add_argument("--card", metavar="FILE", help="write a shareable card (.svg, or .png when rsvg-convert/magick/inkscape is installed)")
     a.add_argument("--top", type=int, default=10, help="sessions to list (default 10)")
     a.add_argument("--top-misses", type=int, default=5, help="single misses to list (default 5)")
     a.add_argument("--fail-over", type=float, metavar="PCT",

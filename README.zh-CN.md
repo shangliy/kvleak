@@ -39,7 +39,7 @@ uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
   Subagent cold start                 145      4.1M   $29.44   5.5%  ▉
 ```
 
-<sub>维护者自己最近 30 天的数据。你的会不一样，这正是要你自己跑一遍的原因。欢迎把你的贴到 [#1](https://github.com/shangliy/kvleak/issues/1)。</sub>
+<sub>维护者自己最近 30 天的数据。你的会不一样，这正是要你自己跑一遍的原因。`kvleak --card card.png` 把你的做成[一张图](docs/assets/card.png)，贴到 [#1](https://github.com/shangliy/kvleak/issues/1)。</sub>
 
 ## 装上
 

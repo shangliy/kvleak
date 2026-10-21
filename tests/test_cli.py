@@ -82,3 +82,24 @@ def test_statusline_install_is_safe(tmp_path, monkeypatch, capsys):
     assert "refreshInterval" not in json.loads(settings.read_text())["statusLine"]
     assert main(["statusline", "--uninstall"]) == 0
     assert "statusLine" not in json.loads(settings.read_text())
+
+
+def test_concentration_and_card(write_jsonl, tmp_path, capsys):
+    from kvleak.card import render_card
+
+    p = _fixture(write_jsonl)
+    svg = tmp_path / "card.svg"
+    assert main(["audit", "--path", str(p), "--json", "--card", str(svg)]) == 0
+    data = json.loads(capsys.readouterr().out)
+    k = data["concentration"]
+    assert k["leaking_sessions"] == 1 and k["top5_share"] == 1.0 and k["sessions_for_half"] == 1
+    text = svg.read_text(encoding="utf-8")
+    assert text.startswith("<svg") and "Cache hit rate" in text and "Idle gap outlived" in text and "uvx kvleak" in text
+    # the card escapes whatever lands in it
+    from kvleak.analyze import analyze
+    from kvleak.sources import load
+
+    r = analyze([load(str(p))])
+    hostile = render_card(r, "<script>")
+    assert "<script>" not in hostile and "&lt;script&gt;" in hostile
+    assert "last 7 days" in render_card(r, "last 7 days")

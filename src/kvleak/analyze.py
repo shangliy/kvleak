@@ -100,6 +100,9 @@ class Report:
     misses: List[Miss] = field(default_factory=list)
     worst_sessions: List[SessionStats] = field(default_factory=list)
     min_miss_tokens: int = 10_000
+    # How concentrated the leak is: share carried by the top 5 sessions, how many
+    # sessions make up half of it, and the share carried by long sessions.
+    concentration: Dict[str, float] = field(default_factory=dict)
 
     @property
     def uncached(self) -> int:
@@ -290,8 +293,36 @@ def analyze(
         sessions.append(s)
     r.model_mix = dict(models.most_common())
     sessions.sort(key=lambda s: -(s.penalty_usd if r.priced else s.penalty))
+    r.concentration = concentration(sessions, r.priced)
     r.worst_sessions = sessions[:top_sessions]
     return r
+
+
+LONG_SESSION_STEPS = 200
+
+
+def concentration(sessions: List[SessionStats], priced: bool) -> Dict[str, float]:
+    """Is the leak a few sessions or everything? `sessions` sorted by leak, largest first."""
+    val = (lambda s: s.penalty_usd) if priced else (lambda s: s.penalty)
+    total = sum(val(s) for s in sessions)
+    leaking = [s for s in sessions if val(s) > 0]
+    if total <= 0 or not leaking:
+        return {}
+    top5 = sum(val(s) for s in leaking[:5])
+    half, n_half = 0.0, 0
+    for s in leaking:
+        half += val(s)
+        n_half += 1
+        if half >= total / 2:
+            break
+    long_s = [s for s in leaking if s.steps >= LONG_SESSION_STEPS]
+    return {
+        "leaking_sessions": len(leaking),
+        "top5_share": top5 / total,
+        "sessions_for_half": n_half,
+        "long_sessions": len(long_s),
+        "long_share": sum(val(s) for s in long_s) / total,
+    }
 
 
 def recommendations(r: Report) -> List[str]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-from .analyze import CAUSES, Report, recommendations
+from .analyze import CAUSES, LONG_SESSION_STEPS, Report, recommendations
 from .fmt import bar, c, duration, pct, table, tok, usd
 
 SOURCE_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Gemini CLI", "opencode": "OpenCode", "generic": "other"}
@@ -21,6 +21,21 @@ CAUSE_COLOR = {
 
 def _money_or_tokens(equiv: float, dollars: float, priced: bool) -> str:
     return usd(dollars) if priced else tok(equiv) + " tok"
+
+
+def concentration_line(r: Report) -> str:
+    """One sentence: is the leak a few sessions or spread across everything?"""
+    k = r.concentration
+    if not k or k["leaking_sessions"] < 2:
+        return ""
+    n_top = min(5, int(k["leaking_sessions"]))
+    parts = ["top {} of {:,} leaking sessions carry {} of the leak".format(n_top, int(k["leaking_sessions"]), pct(k["top5_share"]))]
+    if k["long_sessions"]:
+        parts.append("{} session{} over {} calls carr{} {}".format(
+            int(k["long_sessions"]), "s" if k["long_sessions"] != 1 else "", LONG_SESSION_STEPS,
+            "y" if k["long_sessions"] != 1 else "ies", pct(k["long_share"])))
+    verdict = "concentrated" if k["top5_share"] >= 0.4 else "spread out"
+    return "Concentration: {} · {}".format(verdict, " · ".join(parts))
 
 
 def render_terminal(r: Report, top_misses: int = 5) -> str:
@@ -105,6 +120,9 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
             ]
         )
     out.append(table(rows, "lrrrrl") if len(rows) > 1 else "  (no heavy misses)")
+    line = concentration_line(r)
+    if line:
+        out.append(c("  " + line, "grey"))
     out.append("")
 
     if r.worst_sessions and r.worst_sessions[0].misses:

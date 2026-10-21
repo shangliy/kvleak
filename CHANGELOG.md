@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 (2026-10-21)
 
+- `kvleak --card card.png`: a shareable card of the audit (headline numbers, top three causes, concentration).
+  Hand-written SVG, zero dependencies; rasterised to PNG when rsvg-convert, ImageMagick, Inkscape or Chrome is
+  installed.
+- The report says how concentrated the leak is: the share carried by the top five sessions and by sessions over
+  200 calls, and how many sessions make up half of it (`concentration` in `--json`).
 - Installable as a Claude Code skill (`npx skills add shangliy/kvleak`) and plugin
   (`/plugin marketplace add shangliy/kvleak`): `skills/claude-code-token-cost/SKILL.md` runs the audit when
   you ask about token cost and recommends by evidence; `.claude-plugin/` manifests.

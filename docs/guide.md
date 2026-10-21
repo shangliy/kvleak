@@ -29,6 +29,7 @@ Methodology and reproduction commands: [docs/benchmarks.md](benchmarks.md).
 |---|---|
 | `kvleak` | Audits every session: hit rate, dollars leaked, leak broken down by cause, leakiest sessions, worst single misses, and concrete next steps. |
 | `kvleak --since 7d --html report.html` | A self-contained HTML report (light/dark, no JS) you can share with your team. `--markdown` and `--json` also work. |
+| `kvleak --card card.png` | A shareable card of the headline numbers, the top three causes and how concentrated the leak is ([example](assets/card.png)). SVG always; PNG when rsvg-convert, ImageMagick, Inkscape or Chrome is installed. |
 | `kvleak session <id>` | Call-by-call timeline of one session, with each miss flagged and explained. |
 | `kvleak statusline --install` | Adds a live **cache TTL countdown** to Claude Code: `◕ cache 3:41 · 182k ctx · rebuild $0.89`. |
 | `kvleak advise` | Tells you whether to **`/compact` or hand off to a fresh session now**, and when that pays for itself. `--backtest` replays your history with the advisor in the loop. |

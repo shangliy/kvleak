@@ -41,7 +41,7 @@ equivalents; the percentages are your rate-limit headroom.
   Subagent cold start                 145      4.1M   $29.44   5.5%  ▉
 ```
 
-<sub>The maintainer's last 30 days. Yours will differ; that is the point. Post yours in [#1](https://github.com/shangliy/kvleak/issues/1).</sub>
+<sub>The maintainer's last 30 days. Yours will differ; that is the point. `kvleak --card card.png` turns yours into [one image](docs/assets/card.png); post it in [#1](https://github.com/shangliy/kvleak/issues/1).</sub>
 
 ## Turn it on
 

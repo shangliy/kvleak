@@ -21,6 +21,7 @@
 |---|---|
 | `kvleak` | 全量审计：命中率、漏损金额、按原因拆解、最漏的会话、最贵的单次未命中、可执行建议 |
 | `kvleak --since 7d --html report.html` | 生成可分享的自包含 HTML 报告（亦支持 `--markdown` / `--json`） |
+| `kvleak --card card.png` | 一张可分享的成绩卡：三个核心数字、前三个原因、漏损集中度（[示例](assets/card.png)）。SVG 总是生成；装了 rsvg-convert、ImageMagick、Inkscape 或 Chrome 时出 PNG |
 | `kvleak session <id>` | 单个会话逐步时间线，标出每一次未命中及原因 |
 | `kvleak statusline --install` | 在 Claude Code 状态栏显示**缓存 TTL 倒计时**：`◕ cache 3:41 · 182k ctx · rebuild $0.89`。Claude Code 本身只在有事件时重跑状态栏，所以安装时会写入 `refreshInterval: 5` 让它空闲时也每 5 秒走一格（`--refresh 1` 每秒走，`--refresh 0` 只跟事件）。装完后**新开**的会话、第一条回复之后才会出现 |
 | `kvleak advise` | 告诉你**现在该不该 `/compact`，或者写一份交接文档换新会话**，以及几次调用后回本；`--backtest` 用你的历史数据回测 |
