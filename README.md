@@ -8,6 +8,8 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![kvleak audit, whatif and tune on the maintainer's history](docs/assets/demo.gif)
+
 ```bash
 uvx kvleak            # or: pipx run kvleak  ·  pip install kvleak
 ```
