@@ -1,6 +1,7 @@
 from conftest import claude_line
 
 from kvleak import analyze, classify, load, price_for
+from kvleak.analyze import recommendations
 from kvleak.sources import read_generic
 
 
@@ -126,3 +127,20 @@ def test_gemini_prices_have_no_write_premium():
     assert p.input_per_mtok == 1.25 and p.write_5m_mult == 1.0 and p.write_1h_mult == 1.0 and p.keepalive_kmax() == 9
     assert price_for("gemini-4-argon").read_mult == 0.05
     assert price_for("models/gemini-3.1-pro-preview").name == "gemini-3.1-pro"
+
+
+def test_cause_table_shows_the_size_of_a_typical_rebuild(write_jsonl, capsys):
+    """misses × context size is the leak; the second factor gets its own column and prices the base."""
+    from kvleak.cli import main
+
+    lines = [claude_line(0, 0, w5=50_000), claude_line(1, 10, read=50_000, w5=1_000), claude_line(2, 430, w5=52_000)]
+    path = write_jsonl(lines)
+    r = analyze([load(str(path))])
+    assert r.buckets["cold_start"]["rebuilt_median"] >= 50_000
+    assert r.buckets["ttl_expiry"]["rebuilt_median"] == 51_003
+    assert r.buckets["ttl_expiry"]["rebuilt"] == 51_003
+    assert main(["--path", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "per miss" in out and "51.0k" in out
+    tip = next(t for t in recommendations(r) if t.startswith("New sessions start cold"))
+    assert "rebuild a median 5" in tip and "Every 10k" in tip

@@ -103,7 +103,7 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
     out.append("")
 
     out.append(c(" Where the leak comes from", "bold"))
-    rows = [["cause", "misses", "uncached", "leak", "share", ""]]
+    rows = [["cause", "misses", "uncached", "per miss", "leak", "share", ""]]
     for cause in sorted(CAUSES, key=lambda k: -r.share(k)):
         label, b = CAUSES[cause], r.buckets[cause]
         if not b["count"]:
@@ -114,12 +114,13 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
                 c(label, CAUSE_COLOR[cause]),
                 f"{int(b['count']):,}",
                 tok(b["uncached"]),
+                tok(b["rebuilt_median"]),
                 _money_or_tokens(b["penalty"], b["penalty_usd"], priced),
                 pct(share),
                 c(bar(share, 16), CAUSE_COLOR[cause]),
             ]
         )
-    out.append(table(rows, "lrrrrl") if len(rows) > 1 else "  (no heavy misses)")
+    out.append(table(rows, "lrrrrrl") if len(rows) > 1 else "  (no heavy misses)")
     line = concentration_line(r)
     if line:
         out.append(c("  " + line, "grey"))

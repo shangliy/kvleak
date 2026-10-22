@@ -78,8 +78,8 @@ def render_html(r: Report) -> str:
     )
     cause_rows = "".join(
         '<tr><td><span class="sw" style="background:{}"></span>{}</td><td class="n">{:,}</td>'
-        '<td class="n">{}</td><td class="n">{}</td><td class="n">{}</td></tr>'.format(
-            COLORS[c], escape(CAUSES[c]), int(b["count"]), tok(b["uncached"]),
+        '<td class="n">{}</td><td class="n">{}</td><td class="n">{}</td><td class="n">{}</td></tr>'.format(
+            COLORS[c], escape(CAUSES[c]), int(b["count"]), tok(b["uncached"]), tok(b["rebuilt_median"]),
             _m(r, b["penalty"], b["penalty_usd"]), pct(r.share(c)),
         )
         for c, b in sorted(r.buckets.items(), key=lambda kv: -r.share(kv[0]))
@@ -119,7 +119,7 @@ def render_html(r: Report) -> str:
 </div>
 <h2>Where the leak comes from</h2>
 <div class="stack">{stack}</div><br>
-<div class="wrap"><table><tr><th>cause</th><th class="n">misses</th><th class="n">uncached</th><th class="n">leak</th><th class="n">share</th></tr>{cause_rows}</table></div>
+<div class="wrap"><table><tr><th>cause</th><th class="n">misses</th><th class="n">uncached</th><th class="n">per miss</th><th class="n">leak</th><th class="n">share</th></tr>{cause_rows}</table></div>
 {_daily_svg(r)}
 <h2>What to do about it</h2><ol>{tips}</ol>
 <h2>Leakiest sessions</h2>

@@ -255,7 +255,10 @@ def analyze(
     from .policy import dead_writes
 
     r = Report(min_miss_tokens=min_miss_tokens)
-    r.buckets = {c: {"count": 0, "uncached": 0, "penalty": 0.0, "penalty_usd": 0.0} for c in CAUSES}
+    r.buckets = {
+        c: {"count": 0, "uncached": 0, "rebuilt": 0, "rebuilt_median": 0, "penalty": 0.0, "penalty_usd": 0.0}
+        for c in CAUSES
+    }
     models: Counter = Counter()
     sessions: List[SessionStats] = []
     transcripts = list(transcripts)
@@ -306,6 +309,7 @@ def analyze(
             b = r.buckets[m.cause]
             b["count"] += 1
             b["uncached"] += m.uncached
+            b["rebuilt"] += m.rebuilt
             b["penalty"] += m.penalty
             b["penalty_usd"] += m.penalty_usd or 0.0
             r.keepalive_saving += m.keepalive_saving
@@ -317,6 +321,9 @@ def analyze(
             r.misses.append(m)
         sessions.append(s)
     r.model_mix = dict(models.most_common())
+    for cause in CAUSES:  # the size of a typical rebuild: misses × context size is the leak, this is the second factor
+        sizes = sorted(m.rebuilt for m in r.misses if m.cause == cause)
+        r.buckets[cause]["rebuilt_median"] = sizes[len(sizes) // 2] if sizes else 0
     sessions.sort(key=lambda s: -(s.penalty_usd if r.priced else s.penalty))
     r.concentration = concentration(sessions, r.priced)
     r.worst_sessions = sessions[:top_sessions]
@@ -391,9 +398,15 @@ def recommendations(r: Report) -> List[str]:
                 "scripts instead of agents."
             )
         elif cause == "cold_start":
+            base = int(v["rebuilt_median"])
+            lever = ""
+            if r.priced and v["rebuilt"] and base >= 10_000:
+                per_10k = v["penalty_usd"] / v["rebuilt"] * 10_000 * v["count"]
+                lever = " Every 10k of it moved into files read on demand is worth about ${:,.0f} over this window.".format(per_10k)
             tips.append(
-                "New sessions start cold. Resume (`claude --continue`) instead of starting over for the same task, "
-                "and trim always-loaded context (MCP tool schemas, giant CLAUDE.md files)."
+                "New sessions start cold and rebuild a median {} tokens: that is your always-loaded base (system prompt, "
+                "tool schemas, CLAUDE.md, the skill listing).{} Resume (`claude --continue`) instead of starting over "
+                "for the same task.".format("{:,}".format(base), lever)
             )
     dead = r.dead_write_usd if r.priced else r.dead_write
     total = r.cost_usd if r.priced else r.cost

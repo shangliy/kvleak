@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.3 (2026-10-22)
+
+- **`per miss` column in the cause table** (terminal, HTML, JSON `buckets[cause].rebuilt_median`): the median
+  context a miss of that cause rebuilt. The leak is misses × context size; this is the second factor. For
+  cold starts it is the always-loaded base (system prompt, tool schemas, CLAUDE.md, skill listing), and the
+  cold-start tip now says what moving 10k of it into on-demand files is worth. Asked for by a reader whose
+  base went from 91k to 15k.
+
 ## 0.11.2 (2026-10-22)
 
 - **Statusline: compaction outranks the ping budget.** In the countdown's last two minutes, when the

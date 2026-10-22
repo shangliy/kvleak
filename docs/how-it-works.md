@@ -58,6 +58,14 @@ leak     = rebuilt · (eff_rate − read_mult)               # paid on top of a 
 New content (a fresh user message, new tool results) is not counted as leak,
 because you would pay to write it either way.
 
+The leak is misses × the context each one rebuilt, and the cause table shows
+both factors: `misses` and `per miss`, the median `rebuilt` of that cause. For
+cold starts the median is the always-loaded base (system prompt, tool schemas,
+CLAUDE.md, the skill listing), which is the lever that makes every rebuild
+cheaper before the hit rate moves; the cold-start tip prices 10k of it. For
+idle-gap expiries the median is the accumulated history, where the lever is the
+compaction window and the TTL (§7).
+
 ## 5. Keep-alive counterfactual
 
 For every `ttl_expiry` miss with idle gap `g`:
