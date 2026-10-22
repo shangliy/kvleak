@@ -98,6 +98,14 @@ bucket for the current hour in the last two minutes of the countdown.
 kvleak does not send pings. The refresh must hit the same prefix from inside
 Claude Code; cache-refresher does that with `/cache-auto on <k>`.
 
+**Keep-alive versus compaction.** The two decisions meet in the countdown's
+last two minutes. If the advisor (§6) says carrying this context costs more
+than shrinking it, the statusline shows `⚠ /compact before it expires saves
+~$X` and no ping budget: a ping would keep warm exactly the context that
+should go, and the compaction call reads the old context at the cache-read
+price only while the entry is warm (after expiry it pays the write price for
+the same read). The ping budget appears only when there is nothing to compact.
+
 ## 6. Compaction advisor (`kvleak advise`)
 
 Carrying a context of `C` tokens for one more call costs `C · r_eff`, where

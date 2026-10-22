@@ -1,7 +1,6 @@
 # kvleak analysis of @0xKense1's public 945-run Claude Code dataset
 
 Date: 2026-10-21
-POC: repository owner, X @tamaslisha13127
 Dataset: https://github.com/kenseii1/claude-code-limits-tests (`runs/**/*.json`, 936 valid JSON logs with token usage)
 TL;DR: Re-analyzing @0xKense1's public 945-run dataset using the `costUSD` and cache read/write breakdown recorded inside his own JSON logs flips two headline conclusions from raw-token counting: `/compact` is +14% to +37% more expensive after 3 follow-up questions (breaking even only after ~7–8 questions at N=15/30), and subagent delegation is +29.7% more expensive despite using 3.4% fewer raw tokens.
 

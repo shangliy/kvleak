@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.2 (2026-10-22)
+
+- **Statusline: compaction outranks the ping budget.** In the countdown's last two minutes, when the
+  advisor says carrying the context costs more than shrinking it, the bar reads
+  `⚠ /compact before it expires saves ~$X` and the keep-alive budget is not shown: a ping would keep warm
+  the very context that should go, and the compaction reads the old context at the cache-read price only
+  while the entry is warm. The ping budget still appears when there is nothing worth compacting.
+- README opens with the audit card and the public-data result (kenseii1's 945 runs: `/compact` cut raw
+  tokens 40–72% and raised the bill 14–37%); `docs/launch/kensei-article.md` is the long-form write-up
+  with the reproduction script.
+- sdist is a whitelist (`only-include`); earlier sdists carried two public benchmark result files that a
+  `.gitignore` negation had re-included past the exclude list.
+
 ## 0.11.1 (2026-10-22)
 
 - `kvleak --share` prints a four-line summary to paste into a post or into

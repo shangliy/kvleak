@@ -76,7 +76,8 @@ def render(payload: dict, now: Optional[float] = None) -> str:
     price = price_for(model)
     rebuild = cached * price.write_mult(ttl)
     cost = usd(price.usd(rebuild)) if price.input_per_mtok is not None else tok(rebuild) + " tok"
-    hint = _compact_hint(steps, price, now, cold=left <= 0) if cached >= HINT_MIN_CONTEXT else ""
+    expiring = 0 < left <= PING_HINT_S
+    hint = _compact_hint(steps, price, now, cold=left <= 0, expiring=expiring) if cached >= HINT_MIN_CONTEXT else ""
     if left <= 0:
         return "{} {} · next msg rebuilds {} ({}){}".format(
             c("○", "red"), c("cache cold", "red", "bold"), tok(cached), cost, hint
@@ -85,7 +86,10 @@ def render(payload: dict, now: Optional[float] = None) -> str:
     glyph = RING[min(int(frac * (len(RING) - 1)) + 1, len(RING) - 1)]
     color = "green" if left > 120 else "yellow" if left > 45 else "red"
     clock = "{}:{:02d}".format(int(left) // 60, int(left) % 60)
-    if left <= PING_HINT_S:
+    if expiring and not hint:
+        # No ping budget while the advisor wants a compaction: a ping would keep warm the very
+        # context that costs more to carry than to shrink. Compacting while it is still warm
+        # reads the old context at 0.1x; after expiry the same compaction pays the write price.
         hint += _ping_hint(ttl, now)
     return "{} cache {} · {} ctx · rebuild {}{}".format(
         c(glyph, color), c(clock, color, "bold"), tok(cached), cost, hint
@@ -110,11 +114,16 @@ def _ping_hint(ttl: int, now: float) -> str:
     return " · " + c("⚑ ≤{} ping{} pay".format(k, "s" if k > 1 else ""), "yellow")
 
 
-def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], price, now: float, cold: bool = False) -> str:
+def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], price, now: float, cold: bool = False,
+                  expiring: bool = False) -> str:
     """' · ⚠ /compact saves ~$12' when carrying this context costs more than shrinking it.
 
     On a cold cache the next message rebuilds everything at the write price, so
     compacting *first* (one full-price read, then a small prefix) saves even more.
+    In the countdown's last two minutes (`expiring`) the wording says to do it now:
+    the compaction call reads the old context at the cache-read price only while
+    the entry is warm, and it makes the keep-alive question moot (the prefix to
+    keep alive is about to change), so the ping budget is not shown alongside it.
     """
     from .advisor import Profile, advise_steps
 
@@ -129,7 +138,7 @@ def _compact_hint(steps: Callable[[], Tuple[List[Step], int]], price, now: float
     saving = price.usd(max(a.compact_saving, a.handoff_saving)) or 0
     if saving < 1:
         return ""
-    verb = "/compact first saves" if cold else "/compact saves"
+    verb = "/compact first saves" if cold else "/compact before it expires saves" if expiring else "/compact saves"
     return " · " + c("⚠ {} ~{}".format(verb, usd(saving)), "yellow", "bold")
 
 

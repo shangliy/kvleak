@@ -8,7 +8,9 @@
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-![kvleak 审计、whatif 和 tune 在维护者历史上的输出](docs/assets/demo.gif)
+[![kvleak 审计卡片：命中率 95.2%，$638 漏在缓存未命中上，其中 66% 是空闲间隔超过了缓存 TTL](docs/assets/card.png)](https://github.com/shangliy/kvleak/issues/1)
+
+<sub>维护者自己最近 30 天，`kvleak --card` 生成。你的会不一样，这正是要你自己跑一遍的原因。把你的贴到 [#1](https://github.com/shangliy/kvleak/issues/1)，卡片或 `kvleak --share` 的四行脱敏文字都行。</sub>
 
 <sub>▶ [两分钟视频](https://github.com/shangliy/kvleak/releases/download/v0.9.1/kvleak-demo.mp4)：命中率为什么骗人、漏在哪、怎么修、前后对比、benchmark。</sub>
 
@@ -20,7 +22,7 @@ uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 `npx skills add shangliy/kvleak`，或 `/plugin marketplace add shangliy/kvleak` 后 `/plugin install kvleak@kvleak`。
 
 不需要 API Key、不用配置、不联网、零依赖。它直接读 **Claude Code、Codex CLI、Gemini CLI、OpenCode**
-已经存在本机的会话文件，几秒钟出结果。订阅用户看到的美元是按目录价折算的，百分比就是你的限额余量。
+已经存在本机的会话文件，也读批处理脚本留下的 `claude -p --output-format json` 结果，几秒钟出结果。订阅用户看到的美元是按目录价折算的，百分比就是你的限额余量。
 
 ```text
  kvleak · prompt-cache leak report
@@ -39,7 +41,7 @@ uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
   Subagent cold start                 145      4.1M   $29.44   5.5%  ▉
 ```
 
-<sub>维护者自己最近 30 天的数据。你的会不一样，这正是要你自己跑一遍的原因。`kvleak --card card.png` 把你的做成[一张图](docs/assets/card.png)，`kvleak --share` 输出四行不含路径和会话 ID 的文字，任选一种贴到 [#1](https://github.com/shangliy/kvleak/issues/1)。</sub>
+<sub>同一份审计的文字版。只信一个人的历史不够？在 [kenseii1 公开的 945 次运行](docs/launch/kensei-945-analysis.md)上，按它自己日志里的 `costUSD` 计价，`/compact` 让原始 token 少了 40–72%，**账单却多了 14–37%**；子 Agent 少了 3% token，账单多了 30%。</sub>
 
 ## 装上
 
@@ -88,6 +90,8 @@ $ kvleak whatif
 压缩改变的是"到底携带多少"，所以设置这一档的杠杆是最好的压缩器的三倍。这份历史里 44% 的账单是 cache **写入**。
 
 ## 三条命令
+
+![kvleak 审计、whatif 和 tune 在维护者历史上的输出](docs/assets/demo.gif)
 
 **1. 看漏损。** `kvleak`（就是上面那张表）。`--since 7d` 限定时间，`--html report.html`
 生成可分享的报告，`kvleak session <id>` 逐次调用看一个会话。

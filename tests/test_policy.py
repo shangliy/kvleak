@@ -132,6 +132,21 @@ def test_statusline_cold_hint_says_first(write_jsonl, tmp_path, monkeypatch):
     assert "/compact saves" in warm and "first" not in warm
 
 
+def test_compaction_outranks_the_ping_budget_when_the_cache_is_about_to_expire(write_jsonl, tmp_path, monkeypatch):
+    """A ping keeps warm the context the advisor wants shrunk: say compact now, not how many pings pay."""
+    from kvleak.advisor import Profile
+    from kvleak.statusline import PING_HINT_S
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("NO_COLOR", "1")
+    Profile([], keepalive={"1h": 2}).save()
+    p = _interactive(write_jsonl, gap=30, n=40)  # ~280k context, 1h writes: the advisor wants a compaction
+    last = p.steps[-1].ts.timestamp()
+    line = render({"transcript_path": p.path}, now=last + 3600 - PING_HINT_S + 30)
+    assert "/compact before it expires saves" in line
+    assert "pings pay" not in line
+
+
 def test_subagent_starts_spot_parallel_cold_launches(write_jsonl):
     subs = []
     for i in range(4):
