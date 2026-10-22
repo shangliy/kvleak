@@ -22,3 +22,6 @@ docs/launch/x-publication-log.md
 docs/launch/x-schedule-runbook.md
 docs/launch/outreach.md
 docs/launch/x-*.md
+
+# personal project tracker, not part of the package
+/project.toml
