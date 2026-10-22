@@ -41,7 +41,10 @@ Issues = "https://github.com/shangliy/kvleak/issues"
 path = "src/kvleak/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-exclude = ["docs/launch", "docs/assets", "bench", ".github"]
+# A whitelist: .gitignore negations (e.g. !bench/results/*/report.md) override a plain exclude in hatch.
+only-include = ["src", "tests", "docs", "examples", "skills", ".claude-plugin",
+                "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "README.md", "README.zh-CN.md"]
+exclude = ["docs/launch", "docs/assets"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kvleak"]
