@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tokens are not dollars · how prompt caching is really priced</title>
+<meta name="description" content="Prompt caching explained from the KV cache up. Then 936 public Claude Code benchmark runs, re-priced: /compact cut raw tokens 60% and cost 18% more.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Tokens are not dollars">
+<meta property="og:description" content="In 936 public Claude Code runs, cache reads were 90% of the tokens and 25% of the bill. Cache writes were 9% of the tokens and 59% of the bill. Here's why, and what it flips.">
+<meta property="og:image" content="https://shangliy.github.io/kvleak/blog/tokens-are-not-dollars/og.png">
+<meta property="og:url" content="https://shangliy.github.io/kvleak/blog/tokens-are-not-dollars/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Tokens are not dollars">
+<meta name="twitter:description" content="Cache reads: 90% of the tokens, 25% of the bill. Cache writes: 9% of the tokens, 59% of the bill.">
+<meta name="twitter:image" content="https://shangliy.github.io/kvleak/blog/tokens-are-not-dollars/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23090d16'/%3E%3Crect x='5' y='12' width='10' height='8' fill='%233ad29f'/%3E%3Crect x='15' y='12' width='9' height='8' fill='%23ffb547'/%3E%3Crect x='24' y='12' width='3' height='8' fill='%23a78bfa'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #090d16; --bg2: #0e1422; --panel: #121a2b; --ink: #e9eef7; --muted: #8b97ad; --line: #222d44;
+  --read: #3ad29f; --write: #ffb547; --out: #a78bfa; --miss: #ff5f57; --accent: #ffb547;
+  --glow: rgba(255, 181, 71, 0.16);
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f4f1ea; --bg2: #ece7dc; --panel: #fffdf8; --ink: #17202e; --muted: #5d6676; --line: #dcd5c6;
+  --read: #0f8a62; --write: #b66a00; --out: #6d4fd6; --miss: #c8372d; --accent: #b66a00;
+  --glow: rgba(182, 106, 0, 0.10);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 1.12rem/1.7 var(--body); -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(1200px 600px at 85% -10%, var(--glow), transparent 60%);
+  background-repeat: no-repeat;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 max(18px, env(safe-area-inset-left, 0px)); }
+.col { max-width: 41rem; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--display); margin: 0; line-height: 1.05; text-wrap: balance; }
+h2 { font-size: clamp(1.8rem, 3.6vw, 2.6rem); font-weight: 800; letter-spacing: -0.025em; }
+p { margin: 0; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.84em; background: var(--bg2); border: 1px solid var(--line); border-radius: 5px; padding: 0.05em 0.35em; }
+.eyebrow { font: 500 0.74rem/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); }
+.num { font-variant-numeric: tabular-nums; }
+.r { color: var(--read); } .w { color: var(--write); } .o { color: var(--out); } .m { color: var(--miss); }
+button { font: 500 0.8rem/1 var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 9px 14px; cursor: pointer; }
+button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+
+/* top bar */
+.topbar { display: flex; justify-content: space-between; align-items: center; padding-top: 18px; padding-bottom: 18px; font: 500 0.8rem/1 var(--mono); color: var(--muted); }
+.topbar a { color: var(--ink); text-decoration: none; }
+.topbar .brand b { color: var(--accent); }
+
+/* hero */
+.hero { padding: clamp(28px, 6vw, 72px) 0 clamp(36px, 6vw, 80px); }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 64px); align-items: center; }
+.hero h1 { font-size: clamp(3rem, 8.2vw, 6.4rem); font-weight: 800; letter-spacing: -0.025em; line-height: 0.94; }
+.hero h1 .strike { position: relative; color: var(--muted); }
+.hero h1 .strike::after { content: ""; position: absolute; left: -2%; right: -2%; top: 54%; height: 0.09em; background: var(--miss); transform: rotate(-4deg); border-radius: 4px; }
+.hero .dek { margin-top: 26px; font-size: clamp(1.1rem, 1.7vw, 1.32rem); color: var(--muted); max-width: 33rem; }
+.byline { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 0.8rem/1.4 var(--mono); color: var(--muted); }
+
+.morph { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 24px; box-shadow: 0 30px 80px -40px rgba(0,0,0,0.6); }
+.morph-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.morph-title { font: 600 1.25rem/1.1 var(--display); }
+.morph-title span { display: inline-block; min-width: 5.5ch; color: var(--accent); }
+.stack { display: flex; height: 64px; border-radius: 12px; overflow: hidden; margin-top: 22px; background: var(--bg2); }
+.stack > div { height: 100%; transition: flex-basis 900ms cubic-bezier(.7,0,.2,1); flex: 0 0 auto; position: relative; }
+.stack .s-read { background: var(--read); } .stack .s-write { background: var(--write); } .stack .s-out { background: var(--out); }
+.rows { margin-top: 18px; display: grid; gap: 10px; }
+.rowx { display: grid; grid-template-columns: 1.1rem minmax(0, 1fr) auto; gap: 10px; align-items: baseline; font: 400 0.86rem/1.3 var(--mono); }
+.rowx i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; transform: translateY(1px); }
+.rowx b { font: 800 1.5rem/1 var(--display); font-variant-numeric: tabular-nums; min-width: 4.2ch; text-align: right; }
+.cap { margin-top: 16px; font: 400 0.74rem/1.5 var(--mono); color: var(--muted); }
+
+/* article */
+section { padding: clamp(44px, 7vw, 88px) 0; border-top: 1px solid var(--line); }
+.col > * + * { margin-top: 1.15em; }
+.col h2 + p { margin-top: 0.9em; }
+.lede::first-letter { float: left; font: 800 3.7em/0.8 var(--display); padding: 0.07em 0.1em 0 0; color: var(--accent); }
+.pull { font: 600 clamp(1.4rem, 2.8vw, 1.9rem)/1.25 var(--display); letter-spacing: -0.015em; margin: 1.5em 0 !important; padding-left: 18px; border-left: 3px solid var(--accent); }
+.formula { font: 500 0.92rem/1.65 var(--mono); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 16px; overflow-x: auto; white-space: pre; }
+.note { font-size: 0.96rem; color: var(--muted); border-left: 2px solid var(--line); padding-left: 14px; }
+.wide { max-width: 980px; margin: 2.2em auto 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: clamp(16px, 3vw, 26px); }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.card-head h3 { font-size: 1.12rem; font-weight: 600; }
+figcaption { margin-top: 12px; font: 400 0.76rem/1.55 var(--mono); color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 0.76rem/1.4 var(--mono); color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+/* prefix strip */
+.strip { display: flex; gap: 4px; height: 74px; margin-top: 6px; }
+.strip button { border-radius: 10px; padding: 8px; text-align: left; display: flex; flex-direction: column; justify-content: space-between;
+  border: 1px solid transparent; background: color-mix(in srgb, var(--read) 22%, var(--panel)); color: var(--ink); min-width: 0; overflow: hidden;
+  transition: background 300ms, border-color 300ms; font-size: 0.72rem; line-height: 1.2; }
+.strip button small { color: var(--muted); font-size: 0.7rem; }
+.strip button.miss { background: color-mix(in srgb, var(--miss) 30%, var(--panel)); }
+.strip button.picked { border-color: var(--miss); }
+.strip button.new { background: color-mix(in srgb, var(--write) 25%, var(--panel)); }
+.readouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.ro { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 6px; }
+.ro span { font: 400 0.74rem/1.35 var(--mono); color: var(--muted); }
+.ro b { font: 800 1.55rem/1 var(--display); font-variant-numeric: tabular-nums; }
+.verdict { margin-top: 14px; font: 600 1.02rem/1.45 var(--display); }
+
+/* price table */
+table.data { width: 100%; border-collapse: collapse; font: 400 0.86rem/1.4 var(--mono); font-variant-numeric: tabular-nums; }
+table.data th, table.data td { padding: 10px; border-bottom: 1px solid var(--line); text-align: right; }
+table.data th { color: var(--muted); font-weight: 400; }
+table.data th:first-child, table.data td:first-child { text-align: left; }
+.tablewrap { overflow-x: auto; }
+
+/* controls */
+.controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; }
+.ctl { display: grid; gap: 8px; }
+.ctl label, .ctl .lbl { font: 500 0.72rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.ctl output { font: 800 1.8rem/1 var(--display); font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+
+/* bars */
+.bars { display: grid; gap: 22px; }
+.group h4 { margin: 0 0 8px; font: 500 0.78rem/1 var(--mono); color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.bar { display: grid; grid-template-columns: 6.2rem minmax(0, 1fr) 9.5rem; gap: 10px; align-items: center; font: 400 0.82rem/1.2 var(--mono); margin-top: 6px; }
+.track { height: 22px; background: var(--bg2); border-radius: 6px; overflow: hidden; }
+.fill { height: 100%; border-radius: 6px; transition: width 900ms cubic-bezier(.7,0,.2,1), background 400ms; }
+.fill.cont { background: var(--muted); } .fill.clear { background: var(--read); } .fill.comp { background: var(--write); }
+.val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.val .d { display: inline-block; min-width: 4.6ch; margin-left: 6px; }
+.up { color: var(--miss); } .down { color: var(--read); }
+
+/* line chart */
+svg.chart { width: 100%; height: auto; display: block; }
+svg.chart text { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+svg.chart .grid { stroke: var(--line); }
+svg.chart path { fill: none; stroke-width: 3; stroke-linecap: round; transition: d 900ms cubic-bezier(.7,0,.2,1); }
+svg.chart .dash { stroke-dasharray: 2 7; }
+svg.chart text.halo { paint-order: stroke; stroke: var(--panel); stroke-width: 5px; stroke-linejoin: round; }
+svg.chart circle.x { transition: cx 900ms, cy 900ms, opacity 400ms; }
+
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.mini { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.mini .k { font: 400 0.74rem/1.3 var(--mono); color: var(--muted); }
+.mini .v { font: 800 2.2rem/1 var(--display); margin-top: 8px; font-variant-numeric: tabular-nums; }
+.mini .s { font: 400 0.78rem/1.4 var(--mono); color: var(--muted); margin-top: 8px; }
+
+.rules { list-style: none; padding: 0; counter-reset: r; display: grid; gap: 16px; }
+.rules li { display: grid; grid-template-columns: 2.4rem minmax(0, 1fr); gap: 10px; }
+.rules li::before { counter-increment: r; content: counter(r, decimal-leading-zero); font: 800 1.2rem/1.5 var(--display); color: var(--accent); }
+pre.term { margin: 1.3em 0 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; font: 400 0.8rem/1.65 var(--mono); overflow-x: auto; }
+pre.term .c { color: var(--muted); }
+.install { display: flex; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.install code { flex: 1; border: 0; background: none; padding: 16px 18px; font-size: 1.05rem; white-space: nowrap; overflow-x: auto; }
+.install button { border-radius: 0; border: 0; border-left: 1px solid var(--line); background: var(--ink); color: var(--bg); padding: 0 18px; }
+footer { border-top: 1px solid var(--line); padding: 36px 0 64px; font: 400 0.8rem/1.7 var(--mono); color: var(--muted); }
+footer .row { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+
+@media (max-width: 860px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr); }
+  .controls, .two { grid-template-columns: minmax(0, 1fr); }
+  .readouts { grid-template-columns: minmax(0, 1fr); }
+  .bar { grid-template-columns: 4.4rem minmax(0, 1fr) 6.6rem; gap: 8px; font-size: 0.72rem; }
+  .val .d { min-width: 3.4ch; margin-left: 4px; }
+  svg.chart text { font-size: 15px; }
+  .strip { height: auto; flex-direction: column; }
+  .strip button { flex: none !important; flex-direction: row; align-items: center; height: 40px; padding: 0 12px; font-size: 0.8rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .stack > div, .fill, svg.chart path, svg.chart circle.x { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap topbar">
+  <a class="brand" href="https://github.com/shangliy/kvleak"><b>kvleak</b> · notes</a>
+  <button type="button" id="theme" aria-label="Switch light or dark theme">Light</button>
+</div>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Prompt caching, from the KV cache up</p>
+      <h1 style="margin-top:20px"><span class="strike">Tokens</span><br>are not dollars.</h1>
+      <p class="dek">Your agent's dashboard counts tokens. Your bill counts what kind of tokens they were. In 936 public Claude Code runs, the gap between the two is wide enough to flip which habits save money.</p>
+      <div class="byline"><span>kvleak 0.11.1</span><span>Oct 2026</span><span>14 min read</span><span>interactive</span></div>
+    </div>
+    <div class="morph" aria-label="Share of tokens versus share of dollars in 936 Claude Code runs">
+      <div class="morph-head">
+        <p class="morph-title">Share of <span id="mWhat">tokens</span></p>
+        <div class="seg" role="group" aria-label="Measure">
+          <button type="button" data-m="tok" aria-pressed="true">tokens</button>
+          <button type="button" data-m="usd" aria-pressed="false">dollars</button>
+        </div>
+      </div>
+      <div class="stack" aria-hidden="true">
+        <div class="s-read" id="sRead"></div><div class="s-write" id="sWrite"></div><div class="s-out" id="sOut"></div>
+      </div>
+      <div class="rows" aria-live="polite">
+        <div class="rowx"><i style="background:var(--read)"></i><span>cache reads <span class="cap" style="margin:0">0.1× input price</span></span><b class="r" id="vRead">89.7%</b></div>
+        <div class="rowx"><i style="background:var(--write)"></i><span>cache writes <span class="cap" style="margin:0">1.25–2×</span></span><b class="w" id="vWrite">9.3%</b></div>
+        <div class="rowx"><i style="background:var(--out)"></i><span>output <span class="cap" style="margin:0">5×</span></span><b class="o" id="vOut">1.0%</b></div>
+      </div>
+      <p class="cap">All 936 parsable runs of Kensei's public benchmark (114M tokens, $79.14 at list price). Uncached input rounds to 0%.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+<section>
+  <div class="wrap"><div class="col">
+    <p class="lede">Every coding agent re-sends its whole conversation on every call: system prompt, tool definitions, your instructions file, every file it has read, every command it has run. A normal question takes six or so model calls, and the same hundred thousand tokens go over the wire each time.</p>
+    <p>That would be ruinous without prompt caching, and with it the dashboards look great: hit rates of 90, 95, 99%. But a hit rate is a share of <em>tokens</em>, and the three kinds of token on your bill differ in price by a factor of 20 to 200. Count them by money and the picture changes: the reads that make up 90% of the volume are a quarter of the cost.</p>
+    <p>This piece builds the pricing up from what the cache physically stores, then re-prices a public benchmark that was, quite reasonably, scored in tokens. Two of its conclusions reverse.</p>
+  </div></div>
+</section>
+
+<section id="kv">
+  <div class="wrap">
+    <div class="col">
+      <p class="eyebrow">1 · What is actually cached</p>
+      <h2>The cache stores attention, so it only matches exact prefixes</h2>
+      <p>Before a model writes its first token, it runs a <em>prefill</em> pass over your prompt. For every token, in every layer, it computes a key and a value vector that later tokens attend to. That pile of vectors is the KV cache, and computing it is most of what you pay for as input.</p>
+      <p>Prompt caching keeps that pile around after the request. The next request that starts with exactly the same tokens can skip prefill for that part and read the stored vectors instead.</p>
+      <p>The catch is in the word <em>exactly</em>. Attention is causal: the vectors for token 5,000 depend on tokens 1 to 4,999. Change one token anywhere and every vector after it is wrong, even if the rest of the text is identical. A cache can only match a prefix. Try it below: click the part of the prompt that changes.</p>
+    </div>
+    <figure class="wide">
+      <div class="card">
+        <div class="card-head">
+          <h3>A 200k-token Claude Code request, Opus 5.5, 1-hour cache</h3>
+          <div class="legend"><span><i style="background:var(--read)"></i>read from cache</span><span><i style="background:var(--miss)"></i>rebuilt and re-written</span><span><i style="background:var(--write)"></i>new this turn</span></div>
+        </div>
+        <div class="strip" id="strip" role="group" aria-label="Prompt segments; select the one that changed"></div>
+        <div class="readouts" aria-live="polite">
+          <div class="ro"><span>read from cache</span><b class="r" id="pRead">200k</b></div>
+          <div class="ro"><span>rebuilt (written at 2×)</span><b class="m" id="pMiss">0</b></div>
+          <div class="ro"><span>cost of this call's input</span><b id="pCost">$0.048</b></div>
+        </div>
+        <p class="verdict" id="pVerdict">Nothing before the new message changed, so everything else is a cache read.</p>
+      </div>
+      <figcaption>Segment sizes are illustrative of a long session. Prices from <code>kvleak models</code>: $4/MTok input, reads 0.05×, 1-hour writes 2×.</figcaption>
+    </figure>
+    <div class="col" style="margin-top:2.2em">
+      <p>This is why a timestamp in a system prompt costs a full rebuild on every call, and a hook that injects today's date costs one every morning. A tool list that comes back in a different order does the same, silently. It is also why a model switch is a miss even when the text is identical: the vectors belong to the weights that computed them. And it is why compaction always rebuilds. It rewrites history, so the old prefix no longer exists.</p>
+    </div>
+  </div>
+</section>
+
+<section id="price">
+  <div class="wrap">
+    <div class="col">
+      <p class="eyebrow">2 · The price sheet</p>
+      <h2>A read is nearly free. A write costs more than not caching</h2>
+      <p>Providers price the two sides of the cache very differently. Reading stored vectors costs 0.1× the normal input price on most models, and less on newer ones. Storing them costs a premium on top of the prefill: 1.25× for a 5-minute lifetime, 2× for an hour. Output, the tokens the model writes, costs 5×.</p>
+    </div>
+    <div class="wide card tablewrap" style="max-width:780px">
+      <table class="data">
+        <thead><tr><th>model</th><th>input $/MTok</th><th>cache read</th><th>write, 1h</th><th>one miss costs</th></tr></thead>
+        <tbody>
+          <tr><td>Fable 5.1</td><td>$10.00</td><td class="r">0.025×</td><td class="w">2×</td><td><b>79</b> hits</td></tr>
+          <tr><td>Opus 5.5</td><td>$4.00</td><td class="r">0.05×</td><td class="w">2×</td><td><b>39</b> hits</td></tr>
+          <tr><td>Sonnet 5.5</td><td>$2.00</td><td class="r">0.1×</td><td class="w">2×</td><td><b>19</b> hits</td></tr>
+          <tr><td>Haiku 5.5</td><td>$0.10</td><td class="r">0.1×</td><td class="w">2×</td><td><b>19</b> hits</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col" style="margin-top:2em">
+      <p>The last column is the avoidable part of a miss, <code>(write − read) / read</code>: what you pay for rebuilding a prefix that could have been read, measured in reads. Cheaper reads make each miss look <em>worse</em>, not better. On Fable 5.1 one rebuild is worth 79 hits.</p>
+      <p class="pull">A 95% hit rate tells you how many tokens were cheap. It says nothing about how expensive the other 5% were.</p>
+      <p>The same ratio answers a second question: how long is it worth keeping a cache alive? Each keep-alive ping is one read of the whole prefix. A rebuild costs <code>write − read</code>. So the most pings worth sending is</p>
+      <div class="formula">K = floor((write − read) / read)
+  1h cache, Opus 5.5:  floor((2 − 0.05) / 0.05) = 39 pings</div>
+      <p>Thirty-nine pings, one per hour, is more than a day and a half of idle time. On cost alone, almost any pause you plan to come back from is worth bridging. The catch is the <em>come back</em>: a ping before a pause you never return from is wasted, which is why kvleak's <code>keepalive</code> learns from your own history how often you actually return.</p>
+    </div>
+  </div>
+</section>
+
+<section id="clock" style="background:var(--bg2)">
+  <div class="wrap">
+    <div class="col">
+      <p class="eyebrow">3 · The clock</p>
+      <h2>Every read resets a timer. Lunch doesn't</h2>
+      <p>A cached prefix lives for its TTL after its <em>last use</em>, and each read restarts the clock for free. An agent working in a loop calls every few seconds and never lets it expire. You walking away is what kills it.</p>
+      <p>On my own 30 days of Claude Code, 95.4% of input tokens were cache hits, and 20.7% of input spend still went to rebuilds. Most of that leak, 69%, came from idle gaps that outlived the TTL: lunch, meetings, overnight. Play with the numbers:</p>
+    </div>
+    <div class="wide card">
+      <div class="controls">
+        <div class="ctl"><label for="cCtx">Context size</label><output id="cCtxO">200k</output><input id="cCtx" type="range" min="20" max="1000" step="10" value="200"></div>
+        <div class="ctl"><label for="cIdle">You walk away for</label><output id="cIdleO">84 min</output><input id="cIdle" type="range" min="2" max="720" step="1" value="84"></div>
+        <div class="ctl"><span class="lbl" id="cModelL">Model</span><div class="seg" role="group" aria-labelledby="cModelL" id="cModel"></div></div>
+        <div class="ctl"><span class="lbl" id="cTtlL">Cache lifetime</span><div class="seg" role="group" aria-labelledby="cTtlL" id="cTtl"></div></div>
+      </div>
+      <div class="readouts" aria-live="polite" style="margin-top:22px">
+        <div class="ro"><span>next message if the cache died</span><b class="m" id="cRebuild">$1.60</b></div>
+        <div class="ro"><span>keep-alive pings needed</span><b id="cPings">1</b></div>
+        <div class="ro"><span>cost of those pings</span><b class="r" id="cPingCost">$0.040</b></div>
+      </div>
+      <p class="verdict" id="cVerdict"></p>
+    </div>
+    <p class="col cap" style="margin-top:14px">Rebuild = context × write price. Pings fire just before each expiry, each one a read of the context. Same arithmetic as <code>kvleak breakeven</code>.</p>
+  </div>
+</section>
+
+<section id="bench">
+  <div class="wrap">
+    <div class="col">
+      <p class="eyebrow">4 · A benchmark, re-priced</p>
+      <h2>The same 945 runs, counted two ways</h2>
+      <p>In October, Kensei published one of the most careful Claude Code experiments I've seen: <a href="https://x.com/0xKense1/status/2111105138290987198">12 popular tips, 945 runs</a>, every answer graded, paired comparisons and confidence intervals, and all the raw logs <a href="https://github.com/kenseii1/claude-code-limits-tests">on GitHub</a> under MIT.</p>
+      <p>He scored everything in raw tokens, and said why: Anthropic doesn't publish how cache reads count against a subscription's limits, so tokens were the honest unit. But every log also records <code>costUSD</code>, Claude Code's own price at API list rates. I re-scored his session experiment with it.</p>
+      <p>The experiment builds a chat of 5, 15 or 30 turns, then forks it three ways (keep going, <code>/clear</code>, or <code>/compact</code>) and asks the same three new questions in each fork.</p>
+    </div>
+    <figure class="wide">
+      <div class="card">
+        <div class="card-head">
+          <h3>Three follow-up questions after the fork, totals</h3>
+          <div class="seg" role="group" aria-label="Measure" id="bMeasure">
+            <button type="button" data-m="tok" aria-pressed="true">raw tokens</button>
+            <button type="button" data-m="usd" aria-pressed="false">costUSD</button>
+          </div>
+        </div>
+        <div class="legend" style="margin-bottom:14px"><span><i style="background:var(--muted)"></i>keep going</span><span><i style="background:var(--read)"></i>/clear</span><span><i style="background:var(--write)"></i>/compact (includes the /compact call)</span></div>
+        <div class="bars" id="bars"></div>
+      </div>
+      <figcaption>Means over 3 chains per history length. Data: kenseii1/claude-code-limits-tests, runs/session. Percentages are against "keep going" at the same length.</figcaption>
+    </figure>
+    <div class="col" style="margin-top:2.2em">
+      <p>Flip the toggle. In tokens, <code>/compact</code> saves 39–60% everywhere. In dollars, it costs <strong class="m">14–36% more</strong> at every history length. <code>/clear</code> still wins at 15 and 30 turns, but by less, and at 5 turns it is slightly more expensive than doing nothing.</p>
+      <p>Nothing about the experiment is wrong. The two units simply weigh different things, and section 2 says how. "Keep going" sends a lot of tokens, but nearly all of them are reads of a warm prefix at 0.1×. <code>/compact</code> pays three expensive things to make that prefix smaller:</p>
+      <ul class="rules">
+        <li><span><strong>The summary call itself</strong> reads the whole chat and writes the summary as output at 5×: $0.035 to $0.071 per compaction here.</span></li>
+        <li><span><strong>A new prefix</strong> that has to be written to the cache at 2×, because the old one no longer matches.</span></li>
+        <li><span><strong>Files read again.</strong> The summary keeps conclusions, not the files the agent opened, so the follow-ups re-open them and write them to the cache again. Over three questions the compacted forks wrote roughly twice as many cache tokens as the ones that kept going.</span></li>
+      </ul>
+      <p><code>/clear</code> avoids the first cost, and at 5 turns the other two are enough to cancel its savings: there wasn't much history to drop.</p>
+      <p>A one-time cost can still pay off if the session runs long enough. Here is where the lines cross:</p>
+    </div>
+    <figure class="wide">
+      <div class="card">
+        <div class="card-head">
+          <h3>Cumulative cost of follow-up questions</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="seg" role="group" aria-label="History length" id="lN">
+              <button type="button" data-n="5" aria-pressed="false">5 turns</button>
+              <button type="button" data-n="15" aria-pressed="false">15 turns</button>
+              <button type="button" data-n="30" aria-pressed="true">30 turns</button>
+            </div>
+            <div class="seg" role="group" aria-label="Measure" id="lMeasure">
+              <button type="button" data-m="tok" aria-pressed="false">tokens</button>
+              <button type="button" data-m="usd" aria-pressed="true">dollars</button>
+            </div>
+          </div>
+        </div>
+        <svg class="chart" id="lines" viewBox="0 0 680 336" role="img" aria-labelledby="lTitle"><title id="lTitle">Cumulative cost lines for keep going, /clear and /compact</title></svg>
+        <p class="verdict" id="lVerdict"></p>
+      </div>
+      <figcaption>Solid: the three measured questions. Dashed: the per-question mean extended linearly, which flatters "keep going" a little, since its context keeps growing. /compact starts at the cost of the /compact call.</figcaption>
+    </figure>
+    <div class="col" style="margin-top:2.2em">
+      <p>Measured in tokens, <code>/compact</code> pays for itself before the first question finishes. Measured in dollars, it breaks even after about <strong>7 questions</strong> on a 15-turn history and <strong>8</strong> on a 30-turn one, and on a short history it never does. That's still a fine trade for a session with a long way to go. It's a bad one before a quick question.</p>
+    </div>
+  </div>
+</section>
+
+<section id="sub">
+  <div class="wrap"><div class="col">
+    <p class="eyebrow">5 · Subagents</p>
+    <h2>A fresh context is a cold cache</h2>
+    <p>The same benchmark ran a task (run the tests, diagnose the failures) with three follow-up questions, once in the main chat and once delegated to a subagent. In tokens the subagent was a wash. In dollars it cost almost a third more:</p>
+    <div class="two">
+      <div class="mini"><p class="k">raw tokens, subagent vs main chat</p><p class="v down">−3.4%</p><p class="s">246k vs 255k tokens over 4 calls</p></div>
+      <div class="mini"><p class="k">costUSD, subagent vs main chat</p><p class="v up">+29.7%</p><p class="s">$0.152 vs $0.117 over 4 calls</p></div>
+    </div>
+    <p>A subagent starts with an empty cache, so its system prompt, tools and every file it opens are written to the cache for the first time, at 2×. The task call cost $0.093 delegated against $0.052 in the main chat. The lighter main chat then saved about $0.002 per follow-up, which would take some twenty questions to repay.</p>
+    <p class="note">Subagents still earn their keep: they hold verbose output away from your main context, which matters in long sessions. Kensei found the same and said so. They just aren't a way to save money on a short task.</p>
+  </div></div>
+</section>
+
+<section id="rules">
+  <div class="wrap"><div class="col">
+    <p class="eyebrow">6 · What to do with this</p>
+    <h2>Count what you pay for</h2>
+    <ul class="rules">
+      <li><span><strong>Keep the prefix byte-stable.</strong> No timestamps or random IDs in system prompts, hooks or instruction files; stable tool order; sorted JSON. A change at token 1 costs the whole context.</span></li>
+      <li><span><strong>Pick the model at the start of a session.</strong> Switching mid-session is a full rebuild on the new model.</span></li>
+      <li><span><strong>Use <code>/clear</code> between unrelated tasks</strong> once the history is large. Both units agree on that, as long as there is something big to drop.</span></li>
+      <li><span><strong>Compact when there is a long way to go,</strong> not before a quick question. On these runs it took 7–8 further questions to pay back.</span></li>
+      <li><span><strong>Mind the clock, not the hit rate.</strong> Reply before a big context expires, or let a keep-alive bridge pauses you'll come back from.</span></li>
+      <li><span><strong>For one-shot <code>claude -p</code> batches, use a 5-minute TTL.</strong> A prompt that's written and never read back pays the 1-hour premium for nothing; in this benchmark that was $14 of the $79.</span></li>
+    </ul>
+    <p>All of this depends on your own work, which is the point of measuring it. kvleak reads the session files Claude Code already keeps (and Codex CLI, Gemini CLI, OpenCode, and now <code>claude -p --output-format json</code> results) and prices every miss by cause. It has no dependencies and makes no network calls.</p>
+    <div class="install"><code id="cmd">uvx kvleak</code><button type="button" id="copy">Copy</button></div>
+<pre class="term"><span class="c">$ uvx kvleak --share</span>
+My prompt-cache audit (kvleak):
+• Cache hit rate: 90.6% (936 calls across 621 sessions)
+• Input spend leaked to cache rebuilds: 3.7% ($2.47 of $66.41)
+• #1 leak cause: New session cold start (46.6%, $1.15 across 24 misses)
+
+<span class="c"># that's Kensei's benchmark; this is yours:</span>
+<span class="c">$ uvx kvleak            # the full audit</span>
+<span class="c">$ uvx kvleak tune       # replay your history under each Claude Code setting (an estimate)</span>
+<span class="c">$ uvx kvleak probe      # a week after changing them: measured before vs after</span></pre>
+    <p>If yours looks nothing like mine, that's useful too. Paste the <code>--share</code> output in <a href="https://github.com/shangliy/kvleak/issues/1">issue #1</a>; it contains no paths or session IDs.</p>
+    <p class="note">Limits: dollars here are list API prices as recorded by Claude Code. How caching counts against subscription limits isn't published, so if you're on a plan, read these as relative weights rather than money. Kensei's runs are short code-reading tasks on one codebase; my own figures are one heavy user's month. The full re-analysis, with every number, is in <a href="https://github.com/shangliy/kvleak/blob/main/docs/launch/kensei-945-analysis.md">kensei-945-analysis.md</a>.</p>
+  </div></div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap row">
+    <a href="https://github.com/shangliy/kvleak">github.com/shangliy/kvleak</a>
+    <a href="https://pypi.org/project/kvleak/">pypi.org/project/kvleak</a>
+    <a href="https://github.com/kenseii1/claude-code-limits-tests">benchmark data: kenseii1/claude-code-limits-tests (MIT)</a>
+    <a href="../">earlier post: the 99% cache lie</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const usd = (v) => v >= 100 ? "$" + v.toFixed(0) : v >= 1 ? "$" + v.toFixed(2) : v >= 0.01 ? "$" + v.toFixed(3) : "$" + v.toFixed(4);
+  const ktok = (t) => t >= 1e6 ? (t / 1e6).toFixed(2) + "M" : t >= 1000 ? Math.round(t / 1000) + "k" : String(Math.round(t));
+
+  function seg(group, pick) {
+    group.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+      group.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      pick(b);
+    }));
+  }
+  function buildSeg(el, items, current, onPick) {
+    items.forEach((it) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = it.id; b.setAttribute("aria-pressed", String(it === current));
+      b.addEventListener("click", () => {
+        el.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+        b.setAttribute("aria-pressed", "true"); onPick(it);
+      });
+      el.appendChild(b);
+    });
+  }
+
+  // ---------- theme ----------
+  const root = document.documentElement;
+  const saved = localStorage.getItem("kvleak-theme");
+  if (saved) root.dataset.theme = saved;
+  const themeBtn = $("theme");
+  const syncTheme = () => (themeBtn.textContent = root.dataset.theme === "light" ? "Dark" : "Light");
+  syncTheme();
+  themeBtn.addEventListener("click", () => {
+    root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+    localStorage.setItem("kvleak-theme", root.dataset.theme); syncTheme(); drawLines();
+  });
+
+  // ---------- hero morph ----------
+  const SHARE = { tok: [89.7, 9.3, 1.0], usd: [25.3, 58.6, 16.1] };
+  const morphBtns = document.querySelector(".morph .seg");
+  let morph = "tok", userPicked = false;
+  function setMorph(m) {
+    morph = m;
+    const [r, w, o] = SHARE[m];
+    $("sRead").style.flexBasis = r + "%"; $("sWrite").style.flexBasis = w + "%"; $("sOut").style.flexBasis = o + "%";
+    $("vRead").textContent = r.toFixed(1) + "%"; $("vWrite").textContent = w.toFixed(1) + "%"; $("vOut").textContent = o.toFixed(1) + "%";
+    $("mWhat").textContent = m === "tok" ? "tokens" : "dollars";
+    morphBtns.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === m)));
+  }
+  seg(morphBtns, (b) => { userPicked = true; setMorph(b.dataset.m); });
+  setMorph("tok");
+  if (!reduce) setInterval(() => { if (!userPicked && !document.hidden) setMorph(morph === "tok" ? "usd" : "tok"); }, 3200);
+
+  // ---------- prefix strip ----------
+  const P = 4 / 1e6, READ = 0.05, WRITE = 2;
+  const SEGS = [
+    { id: "system prompt", t: 14000 }, { id: "tools", t: 8000 }, { id: "CLAUDE.md", t: 4000 },
+    { id: "files read", t: 96000 }, { id: "turns 1–40", t: 77000 }, { id: "new", t: 1000, fresh: true },
+  ];
+  const WHY = {
+    "system prompt": "A date or random ID in the system prompt changes token one, so the whole 199k is rebuilt.",
+    "tools": "The tool list came back in a different order (an MCP server reconnected). Everything after it is rebuilt.",
+    "CLAUDE.md": "A hook appended a line to CLAUDE.md. Everything from there on is rebuilt, including every file read.",
+    "files read": "The agent's earlier file reads were rewritten, as compaction does. All later history is rebuilt.",
+    "turns 1–40": "An old turn was edited. Only the turns after it are rebuilt, but that's still most of the context.",
+  };
+  const strip = $("strip");
+  const total = SEGS.reduce((a, s) => a + s.t, 0);
+  SEGS.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.style.flex = String(Math.max(s.t, 15000));
+    b.innerHTML = s.id + "<small>" + ktok(s.t) + "</small>";
+    if (s.fresh) { b.classList.add("new"); b.disabled = true; b.setAttribute("aria-label", "new message, 1k tokens, always new"); }
+    else b.setAttribute("aria-label", "change the " + s.id + " (" + ktok(s.t) + " tokens)");
+    b.addEventListener("click", () => pickSeg(b.classList.contains("picked") ? -1 : i));
+    strip.appendChild(b);
+  });
+  function pickSeg(k) {
+    let read = 0, miss = 0;
+    [...strip.children].forEach((b, i) => {
+      const s = SEGS[i];
+      b.classList.toggle("picked", i === k);
+      const isMiss = k >= 0 && i >= k && !s.fresh;
+      b.classList.toggle("miss", isMiss);
+      if (s.fresh) return;
+      if (isMiss) miss += s.t; else read += s.t;
+    });
+    const fresh = SEGS[SEGS.length - 1].t;
+    const cost = (read * READ + (miss + fresh) * WRITE) * P;
+    $("pRead").textContent = ktok(read); $("pMiss").textContent = ktok(miss); $("pCost").textContent = usd(cost);
+    const base = ((total - fresh) * READ + fresh * WRITE) * P;
+    $("pVerdict").textContent = k < 0
+      ? "Nothing before the new message changed, so everything else is a cache read. Click a segment to change it."
+      : WHY[SEGS[k].id] + " This call costs " + Math.round(cost / base) + "× the warm one.";
+  }
+  pickSeg(-1);
+
+  // ---------- TTL calculator ----------
+  const MODELS = [{ id: "Fable 5.1", p: 10, r: 0.025 }, { id: "Opus 5.5", p: 4, r: 0.05 }, { id: "Sonnet 5.5", p: 2, r: 0.1 }, { id: "Haiku 5.5", p: 0.1, r: 0.1 }];
+  const TTLS = [{ id: "1 hour", m: 60, w: 2 }, { id: "5 minutes", m: 5, w: 1.25 }];
+  let model = MODELS[1], ttl = TTLS[0];
+  buildSeg($("cModel"), MODELS, model, (m) => { model = m; calc(); });
+  buildSeg($("cTtl"), TTLS, ttl, (t) => { ttl = t; calc(); });
+  function calc() {
+    const ctx = Number($("cCtx").value) * 1000, idle = Number($("cIdle").value);
+    $("cCtxO").textContent = ctx >= 1e6 ? "1M" : ktok(ctx);
+    $("cIdleO").textContent = idle >= 120 ? (idle / 60).toFixed(idle % 60 ? 1 : 0) + " h" : idle + " min";
+    const p = model.p / 1e6;
+    const rebuild = ctx * ttl.w * p, avoid = ctx * (ttl.w - model.r) * p;
+    const pings = Math.max(0, Math.ceil(idle / ttl.m) - 1);
+    const pingCost = pings * ctx * model.r * p;
+    const K = Math.floor((ttl.w - model.r) / model.r);
+    $("cRebuild").textContent = idle <= ttl.m ? usd(ctx * model.r * p) : usd(rebuild);
+    $("cPings").textContent = String(pings);
+    $("cPingCost").textContent = usd(pingCost);
+    let v;
+    if (idle <= ttl.m) v = "The cache is still warm when you're back: the next message is an ordinary read.";
+    else if (pings <= K) v = "Worth bridging if you'll come back: " + pings + " ping" + (pings === 1 ? "" : "s") + " cost " + usd(pingCost) + " against " + usd(avoid) + " of avoidable rebuild. Up to " + K + " pings would still pay.";
+    else v = "Let it expire: " + pings + " pings cost more than the " + usd(avoid) + " rebuild they'd save (the limit is " + K + "). Or compact before you leave.";
+    $("cVerdict").textContent = v;
+  }
+  $("cCtx").addEventListener("input", calc); $("cIdle").addEventListener("input", calc); calc();
+
+  // ---------- benchmark bars ----------
+  const BENCH = [
+    { n: 5, tok: [539809, 284308, 327122], usd: [0.1409, 0.1460, 0.1923] },
+    { n: 15, tok: [1119496, 270435, 474870], usd: [0.2228, 0.1117, 0.2544] },
+    { n: 30, tok: [1366859, 285214, 549823], usd: [0.2390, 0.1415, 0.2832] },
+  ];
+  const ARMS = [["keep going", "cont"], ["/clear", "clear"], ["/compact", "comp"]];
+  const bars = $("bars");
+  BENCH.forEach((g) => {
+    const el = document.createElement("div"); el.className = "group";
+    el.innerHTML = "<h4>" + g.n + "-turn history</h4>" + ARMS.map(([lbl, cls]) =>
+      '<div class="bar"><span>' + lbl + '</span><div class="track"><div class="fill ' + cls + '"></div></div><span class="val"></span></div>').join("");
+    bars.appendChild(el);
+  });
+  function drawBars(m) {
+    const max = Math.max(...BENCH.flatMap((g) => g[m]));
+    [...bars.children].forEach((el, gi) => {
+      const g = BENCH[gi];
+      el.querySelectorAll(".bar").forEach((row, ai) => {
+        const v = g[m][ai], d = (v / g[m][0] - 1) * 100;
+        row.querySelector(".fill").style.width = (100 * v / max).toFixed(2) + "%";
+        const dv = ai === 0 ? "" : '<span class="d ' + (d > 0 ? "up" : "down") + '">' + (d > 0 ? "+" : "−") + Math.abs(d).toFixed(0) + "%</span>";
+        row.querySelector(".val").innerHTML = (m === "tok" ? ktok(v) : usd(v)) + (ai === 0 ? '<span class="d"></span>' : dv);
+      });
+    });
+  }
+  seg($("bMeasure"), (b) => drawBars(b.dataset.m));
+  drawBars("tok");
+
+  // ---------- break-even lines ----------
+  const LINES = {
+    5:  { tok: { cmd: 55213, cont: 179936, clear: 94769, comp: 90636 }, usd: { cmd: 0.0354, cont: 0.0470, clear: 0.0487, comp: 0.0523 } },
+    15: { tok: { cmd: 112818, cont: 373165, clear: 90145, comp: 120684 }, usd: { cmd: 0.0565, cont: 0.0743, clear: 0.0372, comp: 0.0660 } },
+    30: { tok: { cmd: 162393, cont: 455620, clear: 95071, comp: 129143 }, usd: { cmd: 0.0708, cont: 0.0797, clear: 0.0472, comp: 0.0708 } },
+  };
+  let ln = 30, lm = "usd";
+  const svg = $("lines"), NS = "http://www.w3.org/2000/svg", QMAX = 12;
+  let X0 = 76, X1 = 664;
+  const Y0 = 280, Y1 = 20;
+  const mk = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  const axis = mk("g", {}), paths = {}, labels = {};
+  svg.appendChild(axis);
+  const COLORS = { cont: "--muted", clear: "--read", comp: "--write" };
+  ["cont", "clear", "comp"].forEach((k) => {
+    paths[k] = mk("path", {}); paths[k + "d"] = mk("path", { class: "dash" });
+    labels[k] = mk("text", { "font-weight": 500, class: "halo" });
+    svg.append(paths[k + "d"], paths[k], labels[k]);
+  });
+  const cross = mk("circle", { class: "x", r: 7, fill: "none", "stroke-width": 2.5 });
+  const crossT = mk("text", { "text-anchor": "middle", "font-weight": 500, class: "halo" });
+  svg.append(cross, crossT);
+  function drawLines() {
+    const css = (v) => getComputedStyle(root).getPropertyValue(v).trim();
+    const narrow = svg.clientWidth > 0 && svg.clientWidth < 520;
+    const W = narrow ? 400 : 680;
+    svg.setAttribute("viewBox", "0 0 " + W + " 336");
+    X0 = narrow ? 58 : 76; X1 = W - 12;
+    const d = LINES[ln][lm];
+    const f = { cont: (q) => d.cont * q, clear: (q) => d.clear * q, comp: (q) => d.cmd + d.comp * q };
+    const top = Math.max(f.cont(QMAX), f.comp(QMAX), f.clear(QMAX));
+    const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const ymax = step * Math.ceil(top / step);
+    const sx = (q) => X0 + (X1 - X0) * q / QMAX, sy = (v) => Y0 - (Y0 - Y1) * v / ymax;
+    const tick = (v) => lm === "tok" ? (v === 0 ? "0" : v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0) + "M" : Math.round(v / 1000) + "k")
+      : (v === 0 ? "$0" : "$" + v.toFixed(2));
+    axis.innerHTML = "";
+    for (let v = 0; v <= ymax + step / 2; v += step) {
+      const y = sy(v);
+      axis.appendChild(mk("line", { class: "grid", x1: X0, x2: X1, y1: y, y2: y }));
+      const t = mk("text", { x: X0 - 8, y: y + 4, "text-anchor": "end" }); t.textContent = tick(v); axis.appendChild(t);
+    }
+    for (let q = 0; q <= QMAX; q += 2) { const t = mk("text", { x: sx(q), y: Y0 + 20, "text-anchor": "middle" }); t.textContent = q; axis.appendChild(t); }
+    const xl = mk("text", { x: X1, y: Y0 + 38, "text-anchor": "end" }); xl.textContent = "follow-up questions"; axis.appendChild(xl);
+    const m3 = mk("line", { x1: sx(3), x2: sx(3), y1: Y1, y2: Y0, stroke: css("--line"), "stroke-dasharray": "3 4" }); axis.appendChild(m3);
+    const m3t = mk("text", { x: sx(3) + 6, y: Y0 - 10 }); m3t.textContent = "← measured · extended →"; axis.appendChild(m3t);
+    const NAMES = { cont: "keep going", clear: "/clear", comp: "/compact" };
+    for (const k of ["cont", "clear", "comp"]) {
+      const solid = [0, 1, 2, 3].map((q) => (q ? "L" : "M") + sx(q).toFixed(1) + " " + sy(f[k](q)).toFixed(1)).join(" ");
+      const dash = "M" + sx(3).toFixed(1) + " " + sy(f[k](3)).toFixed(1) + " L" + sx(QMAX).toFixed(1) + " " + sy(f[k](QMAX)).toFixed(1);
+      const col = css(COLORS[k]);
+      paths[k].setAttribute("d", solid); paths[k].setAttribute("stroke", col);
+      paths[k + "d"].setAttribute("d", dash); paths[k + "d"].setAttribute("stroke", col);
+      labels[k].setAttribute("x", X1); labels[k].setAttribute("y", sy(f[k](QMAX)) - 10); labels[k].setAttribute("text-anchor", "end");
+      labels[k].setAttribute("fill", col); labels[k].textContent = NAMES[k];
+    }
+    // keep labels apart
+    const gap = parseFloat(getComputedStyle(labels.cont).fontSize) * 1.25 || 14;
+    const ys = ["cont", "clear", "comp"].map((k) => [k, Number(labels[k].getAttribute("y"))]).sort((a, b) => a[1] - b[1]);
+    let prev = Y1 + gap * 0.9 - gap;
+    for (const item of ys) { item[1] = Math.max(item[1], prev + gap); prev = item[1]; labels[item[0]].setAttribute("y", item[1]); }
+    const be = d.cont > d.comp ? d.cmd / (d.cont - d.comp) : Infinity;
+    if (be <= QMAX) {
+      cross.setAttribute("cx", sx(be)); cross.setAttribute("cy", sy(f.cont(be))); cross.setAttribute("stroke", css("--ink")); cross.style.opacity = 1;
+      const cy = sy(f.cont(be)), below = cy + 26 < Y0 - 8;
+      const right = sx(be) < W * 0.6;
+      crossT.setAttribute("x", right ? sx(be) + 14 : sx(be) - 14); crossT.setAttribute("y", below ? cy + 26 : cy - 14);
+      crossT.setAttribute("text-anchor", right ? "start" : "end"); crossT.setAttribute("fill", css("--ink"));
+      crossT.textContent = "break-even " + be.toFixed(1);
+    } else { cross.style.opacity = 0; crossT.textContent = ""; }
+    const unit = lm === "tok" ? "raw tokens" : "dollars";
+    $("lVerdict").textContent = be > QMAX
+      ? "In " + unit + ", on a " + ln + "-turn history, /compact never catches up: its follow-ups cost more than keeping going."
+      : be < 1
+        ? "In " + unit + ", /compact pulls ahead before the first follow-up question is done (" + be.toFixed(1) + " questions)."
+        : "In " + unit + ", on a " + ln + "-turn history, /compact pays for itself after " + be.toFixed(1) + " follow-up questions.";
+  }
+  let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(drawLines, 150); });
+  seg($("lN"), (b) => { ln = Number(b.dataset.n); drawLines(); });
+  seg($("lMeasure"), (b) => { lm = b.dataset.m; drawLines(); });
+  drawLines();
+
+  // ---------- copy ----------
+  $("copy").addEventListener("click", () => {
+    const done = () => { $("copy").textContent = "Copied"; setTimeout(() => ($("copy").textContent = "Copy"), 1500); };
+    navigator.clipboard ? navigator.clipboard.writeText($("cmd").textContent).then(done, () => {}) : null;
+  });
+})();
+</script>
+</body>
+</html>
