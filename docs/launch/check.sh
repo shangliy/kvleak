@@ -18,6 +18,13 @@ gh api "repos/$REPO/issues?state=all&sort=updated&per_page=5" --jq '.[] | "issue
 
 echo "-- PyPI (pypistats lags a day; a brand-new package's first days are mostly mirrors)"
 curl -s -A "$UA" "https://pypistats.org/api/packages/kvleak/recent" | python3 -c 'import sys,json; d=json.load(sys.stdin)["data"]; print("downloads: day {} · week {} · month {}".format(d["last_day"], d["last_week"], d["last_month"]))' 2>/dev/null
+# Humans show up as macOS/Windows; "null" has no pip user agent (scanners, crawlers); Linux+py3.9 is mostly scanners too.
+curl -s -A "$UA" "https://pypistats.org/api/packages/kvleak/system?mirrors=false" | python3 -c '
+import sys,json,collections
+rows=json.load(sys.stdin)["data"]; by=collections.defaultdict(dict)
+for r in rows: by[r["date"]][r["category"]]=r["downloads"]
+for day in sorted(by)[-3:]:
+    d=by[day]; print("  {} by OS: macOS {} · Windows {} · Linux {} · no-UA {}  (macOS/Windows = real people)".format(day, d.get("Darwin",0), d.get("Windows",0), d.get("Linux",0), d.get("null",0)))' 2>/dev/null
 
 echo "-- Hacker News"
 curl -s "https://hacker-news.firebaseio.com/v0/item/$HN_ITEM.json" | python3 -c '
