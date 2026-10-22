@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.1 (2026-10-22)
+
+- `kvleak --share` prints a four-line summary to paste into a post or into
+  [issue #1](https://github.com/shangliy/kvleak/issues/1): hit rate, the share of input spend lost to rebuilds,
+  and the largest cause. It contains no paths, project names or session IDs.
+- `claude -p --output-format json` results are read directly. Each `.json` file with a `usage` block is one call,
+  with 1h and 5m cache writes kept apart; files that share a `session_id` (a `--resume` chain) are merged into one
+  session in time order, so idle gaps and compactions between turns are found. `kvleak session <id>` finds these
+  sessions by ID. Other `.json` files are still skipped.
+- `docs/launch/kensei-945-analysis.md`: the public 945-run benchmark from
+  [kenseii1/claude-code-limits-tests](https://github.com/kenseii1/claude-code-limits-tests) priced by the
+  `costUSD` in its own logs. Measured that way, `/compact` costs 14–36% more over the next three questions
+  (raw tokens fall 39–60%) and a subagent costs 30% more (raw tokens fall 3%).
+
 ## 0.11.0 (2026-10-22)
 
 Five corrections to the arithmetic, each from an outside audit of the code, each with a test.

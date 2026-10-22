@@ -157,7 +157,7 @@ _INPUT_KEYS = ("input_tokens", "prompt_tokens", "promptTokenCount", "uncached_in
 _READ_KEYS = ("cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "cachedContentTokenCount")
 _WRITE_KEYS = ("cache_creation_input_tokens", "cache_write_tokens")
 _OUTPUT_KEYS = ("output_tokens", "completion_tokens", "candidatesTokenCount")
-_TS_KEYS = ("timestamp", "created_at", "createdAt", "time", "ts")
+_TS_KEYS = ("timestamp", "created_at", "createdAt", "time", "ts", "_t_start", "_t_end")
 
 
 def _first(d: dict, keys) -> Optional[object]:
@@ -186,31 +186,58 @@ def _generic_step(obj: dict) -> Optional[Step]:
     write = _int(_first(usage, _WRITE_KEYS))
     if inp + read + write == 0:
         return None
-    model = obj.get("model") or (obj.get("message") or {}).get("model") or usage.get("model")
+    breakdown = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
+    w1h = min(_int(breakdown.get("ephemeral_1h_input_tokens")), write)
+    w5m = write - w1h
+    model_usage = obj.get("modelUsage") if isinstance(obj.get("modelUsage"), dict) else {}
+    model = (
+        obj.get("model")
+        or (obj.get("message") or {}).get("model")
+        or usage.get("model")
+        or next(iter(model_usage), None)
+        or (obj.get("_init") or {}).get("model")
+    )
+    compacted = bool(obj.get("_compact"))
     return Step(
         ts=parse_ts(_first(obj, _TS_KEYS)),
         model=model,
         input=inp,
-        write_5m=write,
+        write_5m=w5m,
+        write_1h=w1h,
         read=read,
         output=_int(_first(usage, _OUTPUT_KEYS)),
+        after_compaction=compacted,
     )
 
 
 def read_generic(path: str) -> Transcript:
     steps = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                obj = json.loads(line)
-            except ValueError:
-                continue
+    p = Path(path)
+    session_id = p.stem
+    raw = open(path, "r", encoding="utf-8", errors="replace").read()
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            session_id = obj.get("session_id") or obj.get("sessionId") or session_id
+            step = _generic_step(obj)
+            if step:
+                steps.append(step)
+    if not steps:
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            doc = None
+        items = doc if isinstance(doc, list) else [doc] if isinstance(doc, dict) else []
+        for obj in items:
             if isinstance(obj, dict):
+                session_id = obj.get("session_id") or obj.get("sessionId") or session_id
                 step = _generic_step(obj)
                 if step:
                     steps.append(step)
-    p = Path(path)
-    return Transcript(path, p.stem, p.parent.name, False, steps, "generic")
+    return Transcript(path, str(session_id), p.parent.name, False, steps, "generic")
 
 
 # ------------------------------------------------------------------------- discovery
@@ -248,6 +275,12 @@ def detect_format(path: str) -> str:
     if is_gemini_path(path):
         return "gemini"
     if path.endswith(".json"):
+        try:
+            head = open(path, "r", encoding="utf-8", errors="replace").read(16_384)
+        except OSError:
+            return "skip"
+        if '"usage"' in head and any(f'"{k}"' in head for k in _INPUT_KEYS + _READ_KEYS + _WRITE_KEYS):
+            return "generic"
         return "skip"
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:

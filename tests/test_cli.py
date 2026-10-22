@@ -103,3 +103,32 @@ def test_concentration_and_card(write_jsonl, tmp_path, capsys):
     hostile = render_card(r, "<script>")
     assert "<script>" not in hostile and "&lt;script&gt;" in hostile
     assert "last 7 days" in render_card(r, "last 7 days")
+
+
+def test_share_and_claude_json_runs(write_jsonl, tmp_path, capsys):
+    p = _fixture(write_jsonl)
+    assert main(["--path", str(p), "--share"]) == 0
+    out = capsys.readouterr().out
+    assert "My prompt-cache audit (kvleak):" in out
+    assert "uvx kvleak --share" in out and str(tmp_path) not in out
+
+    jdir = tmp_path / "runs"
+    jdir.mkdir()
+    for i, ts in enumerate(("2026-10-15T00:00:00Z", "2026-10-15T00:00:10Z")):
+        (jdir / f"turn-{i}.json").write_text(json.dumps({
+            "type": "result",
+            "session_id": "shared-sess-id",
+            "_t_start": ts,
+            "usage": {
+                "input_tokens": 4,
+                "cache_creation_input_tokens": 20_000 if i == 0 else 1_000,
+                "cache_read_input_tokens": 0 if i == 0 else 20_000,
+                "output_tokens": 200,
+                "cache_creation": {"ephemeral_1h_input_tokens": 20_000 if i == 0 else 1_000, "ephemeral_5m_input_tokens": 0},
+            },
+            "modelUsage": {"claude-sonnet-5-5": {"inputTokens": 4}},
+        }))
+    assert main(["--path", str(jdir), "--json"]) == 0
+    jdata = json.loads(capsys.readouterr().out)
+    assert jdata["sessions"] == 1 and jdata["steps"] == 2
+

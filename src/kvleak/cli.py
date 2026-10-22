@@ -91,9 +91,29 @@ def load_all(paths: List[str], fmt_: str, since: Optional[float], project: Optio
     else:
         results = [_load_one(j) for j in jobs]
     out = [t for found in results for t in found if t.steps]
+    out = _merge_json_sessions(out)
     if project:
         out = [t for t in out if project.lower() in t.path.lower() or project.lower() in t.project.lower()]
     return out
+
+
+def _merge_json_sessions(transcripts: List[Transcript]) -> List[Transcript]:
+    """Merge multi-turn `claude -p --resume --output-format json` files that share a session_id."""
+    grouped = {}
+    passthrough: List[Transcript] = []
+    for t in transcripts:
+        if t.source == "generic" and t.path.endswith(".json") and t.session_id != Path(t.path).stem:
+            key = (t.project, t.session_id)
+            if key not in grouped:
+                grouped[key] = Transcript(t.path, t.session_id, t.project, t.is_subagent, list(t.steps), t.source)
+            else:
+                grouped[key].steps.extend(t.steps)
+        else:
+            passthrough.append(t)
+    for t in grouped.values():
+        t.steps.sort(key=lambda s: (s.ts is None, s.ts))
+        passthrough.append(t)
+    return passthrough
 
 
 def _default_paths(args) -> List[str]:
@@ -144,7 +164,11 @@ def cmd_audit(args) -> int:
     if args.card:
         _write_card(report, args.card, args.since)
         wrote_file = True
-    if args.json:
+    if getattr(args, "share", False):
+        from .report import render_share
+
+        print(render_share(report))
+    elif args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True, default=str))
     elif not wrote_file or sys.stdout.isatty():
         from .report import render_terminal
@@ -866,10 +890,16 @@ def _find_session(paths: List[str], needle: str) -> Optional[str]:
 
 def cmd_session(args) -> int:
     path = _find_session(_default_paths(args), args.id)
-    if not path:
-        print("kvleak: no transcript matching {!r}".format(args.id), file=sys.stderr)
-        return 1
-    t = load(path, args.format)
+    if path:
+        t = load(path, args.format)
+    else:
+        matches = [tr for tr in load_all(_default_paths(args), args.format, args.since, args.project)
+                   if args.id in tr.session_id or args.id in tr.path]
+        if not matches:
+            print("kvleak: no transcript matching {!r}".format(args.id), file=sys.stderr)
+            return 1
+        t = matches[0]
+        path = t.path
     misses = {m.step_index: m for m in classify(t, args.min_miss)}
     c = fmt.c
     print(c("\n {} ".format(t.session_id), "bold") + c(path, "grey"))
@@ -1228,6 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("audit", help="audit transcripts (default command)")
     _add_common(a)
     a.add_argument("--json", action="store_true", help="machine-readable output")
+    a.add_argument("--share", action="store_true", help="print a redacted 4-line summary ready to paste into X or GitHub issue #1")
     a.add_argument("--html", metavar="FILE", help="write a self-contained HTML report")
     a.add_argument("--markdown", metavar="FILE", help="write a Markdown summary (great for PRs / Slack)")
     a.add_argument("--card", metavar="FILE", help="write a shareable card (.svg, or .png when rsvg-convert/magick/inkscape is installed)")

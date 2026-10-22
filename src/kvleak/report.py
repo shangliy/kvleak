@@ -175,7 +175,32 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
             )
         )
     out.append(c("  Tune Claude Code's settings from this data: kvleak tune   ·   One session: kvleak session <id>", "grey"))
+    out.append(c("  Share a redacted 4-line summary: kvleak --share", "grey"))
     return "\n".join(out)
+
+
+def render_share(r: Report) -> str:
+    """Redacted, copy-paste-ready 4-line summary for X / Reddit / GitHub Issue #1 (no paths or session IDs)."""
+    if r.steps == 0:
+        return "No model calls with token usage found."
+    priced = r.unpriced_steps < r.steps
+    m = lambda e, d: _money_or_tokens(e, d, priced)  # noqa: E731
+    leak_share = pct(r.leak_fraction())
+    top_cause = max(CAUSES, key=lambda k: r.share(k)) if r.leak > 0 else None
+    if top_cause and r.buckets[top_cause]["count"]:
+        b = r.buckets[top_cause]
+        cause_line = "• #1 leak cause: {} ({}, {} across {:,} misses)".format(
+            CAUSES[top_cause], pct(r.share(top_cause)), m(b["penalty"], b["penalty_usd"]), int(b["count"])
+        )
+    else:
+        cause_line = "• #1 leak cause: none (no heavy misses)"
+    return "\n".join([
+        "My prompt-cache audit (kvleak):",
+        "• Cache hit rate: {} ({:,} calls across {:,} sessions)".format(pct(r.hit_rate), r.steps, r.sessions),
+        "• Input spend leaked to cache rebuilds: {} ({} of {})".format(leak_share, m(r.leak, r.leak_usd), m(r.cost, r.cost_usd)),
+        cause_line,
+        "Audit yours in 3s (local, zero deps): `uvx kvleak --share` · github.com/shangliy/kvleak/issues/1",
+    ])
 
 
 def render_markdown(r: Report) -> str:
