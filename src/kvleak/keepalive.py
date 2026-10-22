@@ -68,15 +68,24 @@ class Budget:
     model: Optional[str] = None
 
     @property
+    def priced(self) -> bool:
+        return any(r.saving_usd for r in self.rows)
+
+    def score(self, r: PolicyRow) -> float:
+        """Dollars when the model has a price, base-equivalent tokens otherwise (the
+        policy is the same either way; an unpriced model used to always get 0 pings)."""
+        return r.saving_usd if self.priced else r.saving
+
+    @property
     def best(self) -> PolicyRow:
-        return max(self.rows, key=lambda r: (r.saving_usd, -r.pings))
+        return max(self.rows, key=lambda r: (self.score(r), -r.pings))
 
     def knee(self, share: float = KNEE_SHARE) -> int:
         """Smallest ping count that already captures `share` of the best saving."""
-        best = self.best.saving_usd
+        best = self.score(self.best)
         if best <= 0:
             return 0
-        return next(r.pings for r in self.rows if r.saving_usd >= share * best)
+        return next(r.pings for r in self.rows if self.score(r) >= share * best)
 
     @property
     def recommended(self) -> int:

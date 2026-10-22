@@ -196,7 +196,7 @@ def _profile(args):
 
 
 def cmd_advise(args) -> int:
-    from .advisor import advise_steps, backtest
+    from .advisor import advise_steps, backtest, optimal_window
 
     c = fmt.c
     if args.backtest:
@@ -238,6 +238,8 @@ def cmd_advise(args) -> int:
         money(a.per_call_now), round(100 * _profile(args).miss_rate, 1)))
     print("  Calls so far         {}  ·  expected still to come ≈ {:.0f} (from your history)".format(
         a.calls_so_far, a.expected_remaining))
+    print("  Auto-compact at      {}  closed-form optimum for this growth rate and TTL; `kvleak tune` replays the real thing".format(
+        fmt.tok(optimal_window(price, a.ttl, a.growth_per_call, _profile(args).miss_rate))))
     print()
     rows = [["option", "new context", "one-time cost", "pays off after", "expected saving"]]
     rows.append(["/compact", fmt.tok(a.compact_to), money(a.compact_cost),
@@ -458,9 +460,19 @@ def _tune_plan(args, transcripts: List[Transcript], since: float):
     now_label = fmt.tok(parse_tokens(str(now_w))) if now_w else "auto (~967k)"
     real = sum(1 for t in main_t for s in t.steps if s.after_compaction)
     if pick:
-        row("autoCompactWindow", now_label, fmt.tok(pick.window), pick.saved_usd,
-            "{} compactions over {} sessions instead of {} · −{} of input spend".format(
-                pick.compactions, pick.sessions, real, fmt.pct(pick.saved_pct)),
+        why = "{} compactions over {} sessions instead of {} · −{} of input spend".format(
+            pick.compactions, pick.sessions, real, fmt.pct(pick.saved_pct))
+        growths = sorted(max((t.steps[-1].prompt - t.steps[0].prompt) / (len(t.steps) - 1), 0.0)
+                         for t in main_t if len(t.steps) >= 5)
+        if growths:
+            from .advisor import optimal_window
+            from .pricing import TTL_1H, TTL_5M
+
+            w1h = sum(s.write_1h for t in main_t for s in t.steps)
+            w5m = sum(s.write_5m for t in main_t for s in t.steps)
+            wstar = optimal_window(price_for(model), TTL_1H if w1h > w5m else TTL_5M, growths[len(growths) // 2], prof.miss_rate)
+            why += " · closed-form optimum ≈ {}".format(fmt.tok(wstar))
+        row("autoCompactWindow", now_label, fmt.tok(pick.window), pick.saved_usd, why,
             key="autoCompactWindow", value=pick.window)
     else:
         row("autoCompactWindow", now_label, now_label, 0.0, "no window beats what you do by hand")
@@ -539,7 +551,8 @@ def _tune_plan(args, transcripts: List[Transcript], since: float):
     # 5. subagent cold starts: no setting to flip, but three knobs in the agent file.
     sub = subagent_starts(transcripts, price_for)
     if sub.count:
-        why = "{} on first calls; {} of {} started with nothing cached".format(fmt.usd(sub.cost_usd), sub.cold, sub.count)
+        why = "{} on first calls; {} of {} started with nothing cached, {} of those right after a sibling".format(
+            fmt.usd(sub.cost_usd), sub.cold, sub.count, sub.staggerable)
         if sub.stagger_saving_usd >= 1:
             why += " · launch one, let it warm the {} shared prefix, then the rest: ~{}".format(
                 fmt.tok(sub.base), fmt.usd(sub.stagger_saving_usd))
@@ -714,7 +727,16 @@ def cmd_skills(args) -> int:
 
 def cmd_probe(args) -> int:
     """Before/after the day kvleak's changes were applied."""
-    from .probe import MIN_SESSIONS, contrast, first_applied, load_events, projected_saving_30d, snapshot, to_dict
+    from .probe import (
+        MIN_SESSIONS,
+        contrast,
+        decompose,
+        first_applied,
+        load_events,
+        projected_saving_30d,
+        snapshot,
+        to_dict,
+    )
 
     c = fmt.c
     events = load_events()
@@ -762,6 +784,15 @@ def cmd_probe(args) -> int:
         print("  {} Input spend per call {} → {}: at the after-side call rate that is {} {} per 30 days.".format(
             c("→", "green" if proj > 0 else "yellow", "bold"), fmt.usd(before.input_per_call), fmt.usd(after.input_per_call),
             c(fmt.usd(abs(proj)), "green" if proj > 0 else "red", "bold"), verb))
+        policy, mix = decompose(before.strata, after.strata)
+        if before.strata and after.strata:
+            adj = projected_saving_30d(before, after, -policy)
+            print("  {} Same model and session depth: {} per call is the settings' doing, {} the work itself "
+                  "(longer or shorter sessions, other models); the settings alone are worth {} per 30 days.".format(
+                      c("→", "green" if adj > 0 else "yellow", "bold"),
+                      c("{}{}".format("−" if policy <= 0 else "+", fmt.usd(abs(policy))), "green" if policy < 0 else "red", "bold"),
+                      "{}{}".format("−" if mix <= 0 else "+", fmt.usd(abs(mix))),
+                      c(fmt.usd(abs(adj)) + (" less" if adj >= 0 else " more"), "green" if adj > 0 else "red", "bold")))
     print(c("  Interactive sessions only (no one-shot runs, no subagents); a session counts on the side its first call "
             "falls on. Before/after on your own work, not a controlled comparison: per-call and share rows cancel "
             "most of what changed in the work itself.", "grey"))

@@ -287,24 +287,43 @@ class SubagentStarts:
     tokens: int = 0
     cost_usd: float = 0.0
     cold: int = 0  # first calls that read nothing at all: no sibling had warmed the shared prefix yet
+    staggerable: int = 0  # cold starts that followed a sibling's launch within LAUNCH_WINDOW_S
     base: int = 0  # size of that shared prefix (system prompt + tools + CLAUDE.md), learned
-    stagger_saving_usd: float = 0.0  # if each cold start had read the prefix instead of writing it
+    stagger_saving_usd: float = 0.0  # if each staggerable cold start had read the prefix instead of writing it
 
     @property
     def avg(self) -> float:
         return self.tokens / self.count if self.count else 0.0
 
 
+LAUNCH_WINDOW_S = 120  # subagent first calls closer than this were launched together
+
+
+def launched_together(firsts: Sequence[Step], window_s: float = LAUNCH_WINDOW_S) -> set:
+    """ids of the first calls that followed a sibling's within `window_s`: the followers
+    of each launch cluster. The earliest call of a cluster is its leader and writes the
+    shared prefix whatever happens; a subagent launched on its own has no leader to wait for."""
+    followers = set()
+    prev_ts = None
+    for s in sorted((s for s in firsts if s.ts is not None), key=lambda s: s.ts):
+        if prev_ts is not None and (s.ts - prev_ts).total_seconds() <= window_s:
+            followers.add(id(s))
+        prev_ts = s.ts
+    return followers
+
+
 def subagent_starts(transcripts: Sequence[Transcript], price_for: PriceFor) -> SubagentStarts:
     """Subagents launched in parallel all start cold: the first one has not finished
     writing the shared prefix when the others send theirs. Launching one first and the
-    rest once it has replied turns those writes into reads."""
+    rest once it has replied turns those writes into reads. Only the followers of a
+    launch cluster count towards the stagger saving; a lone cold start is unavoidable."""
     res = SubagentStarts()
     firsts = [t.steps[0] for t in transcripts if t.is_subagent and t.steps]
     if not firsts:
         return res
     sizes = sorted(s.uncached for s in firsts)
     res.base = sizes[len(sizes) // 4]  # the lean quartile ≈ prefix without the task prompt
+    followers = launched_together(firsts)
     for s in firsts:
         p = price_for(s.model)
         res.count += 1
@@ -312,6 +331,8 @@ def subagent_starts(transcripts: Sequence[Transcript], price_for: PriceFor) -> S
         res.cost_usd += p.usd(s.input + s.write_5m * p.write_5m_mult + s.write_1h * p.write_1h_mult) or 0.0
         if s.read < 2_000:
             res.cold += 1
-            ttl = _ttl_of(s, TTL_5M)
-            res.stagger_saving_usd += p.usd(min(res.base, s.uncached) * (p.write_mult(ttl) - p.read_mult)) or 0.0
+            if id(s) in followers:
+                res.staggerable += 1
+                ttl = _ttl_of(s, TTL_5M)
+                res.stagger_saving_usd += p.usd(min(res.base, s.uncached) * (p.write_mult(ttl) - p.read_mult)) or 0.0
     return res

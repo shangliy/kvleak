@@ -102,3 +102,27 @@ def test_breakeven_kmax():
     assert price_for("claude-opus-5-5").keepalive_kmax() == 24
     assert price_for("claude-fable-5-1-20261001").keepalive_kmax() == 49
     assert price_for("some-unknown-model").input_per_mtok is None
+
+
+def test_new_tool_output_is_not_a_rebuild(write_jsonl):
+    # the second call hit the whole previous prompt and wrote 70k of *new* tool output: no leak
+    t = _session(write_jsonl, (0, dict(w5=10_000)), (5, dict(read=10_003, w5=70_000)))
+    assert [m.cause for m in classify(t)] == ["cold_start"]
+
+
+def test_partial_prefix_hit_counts_only_the_lost_part(write_jsonl):
+    t = _session(write_jsonl, (0, dict(w5=100_000)), (5, dict(read=60_000, w5=50_000)))
+    m = classify(t)[-1]
+    assert m.cause == "prefix_bust" and m.rebuilt == 100_003 - 60_000
+
+
+def test_unmarked_compaction_is_inferred_from_the_shrink(write_jsonl):
+    t = _session(write_jsonl, (0, dict(w5=40_000)), (5, dict(read=40_003, w5=1_000)), (10, dict(w5=25_000)))
+    assert classify(t)[-1].cause == "compaction"
+
+
+def test_gemini_prices_have_no_write_premium():
+    p = price_for("gemini-2.5-pro")
+    assert p.input_per_mtok == 1.25 and p.write_5m_mult == 1.0 and p.write_1h_mult == 1.0 and p.keepalive_kmax() == 9
+    assert price_for("gemini-4-argon").read_mult == 0.05
+    assert price_for("models/gemini-3.1-pro-preview").name == "gemini-3.1-pro"

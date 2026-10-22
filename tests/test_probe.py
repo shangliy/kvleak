@@ -4,7 +4,16 @@ from conftest import T0, claude_line
 
 from kvleak import load
 from kvleak.cli import main
-from kvleak.probe import Snapshot, contrast, first_applied, load_events, projected_saving_30d, record, snapshot
+from kvleak.probe import (
+    Snapshot,
+    contrast,
+    decompose,
+    first_applied,
+    load_events,
+    projected_saving_30d,
+    record,
+    snapshot,
+)
 
 MODEL = "claude-opus-5-5"
 DAY = 86400
@@ -71,3 +80,15 @@ def test_probe_cli(tmp_path, monkeypatch, capsys, write_jsonl):
     record("tune", at=T0.timestamp() + 12 * DAY + 1)
     assert main(["probe", "--path", root, "--no-color"]) == 0
     assert "Too early" in capsys.readouterr().out
+
+
+def test_decompose_splits_policy_from_mix():
+    before = {"m|10": [10, 1.0], "m|25": [10, 3.0]}  # $0.10 and $0.30 per call
+    after = {"m|10": [20, 1.0], "m|25": [10, 2.0]}  # $0.05 and $0.20 per call, and more shallow calls
+    policy, mix = decompose(before, after)
+    y0, y1 = 4.0 / 20, 3.0 / 30
+    assert abs(policy + mix - (y1 - y0)) < 1e-12
+    assert abs(policy - (0.5 * -0.05 + 0.5 * -0.10)) < 1e-12  # every stratum got cheaper
+    assert decompose({}, after) == (0.0, 0.0)
+    a, b = Snapshot(calls=30, days=3.0, input_usd=3.0, strata=after), Snapshot(calls=20, days=30, input_usd=4.0, strata=before)
+    assert abs(projected_saving_30d(b, a, -policy) - 0.075 * 30 * 10) < 1e-9

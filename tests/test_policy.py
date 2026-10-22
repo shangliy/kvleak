@@ -139,5 +139,16 @@ def test_subagent_starts_spot_parallel_cold_launches(write_jsonl):
         line = claude_line(i, i, read=read, w1h=11_000 if read == 0 else 500, inp=6_000, model="claude-opus-5-5", sid="s")
         subs.append(load(str(write_jsonl([line], name=f"agent-{i}.jsonl", sub="s/subagents")), "claude"))
     r = subagent_starts(subs, price_for)
-    assert r.count == 4 and r.cold == 3 and r.stagger_saving_usd > 0
+    assert r.count == 4 and r.cold == 3 and r.staggerable == 2 and r.stagger_saving_usd > 0
     assert r.base <= 17_000
+
+
+def test_lone_subagent_cold_start_cannot_be_staggered(write_jsonl):
+    line = claude_line(0, 0, read=0, w1h=11_000, inp=6_000, model="claude-opus-5-5", sid="s")
+    t = load(str(write_jsonl([line], name="agent-solo.jsonl", sub="s/subagents")), "claude")
+    r = subagent_starts([t], price_for)
+    assert r.cold == 1 and r.staggerable == 0 and r.stagger_saving_usd == 0
+    # two launched 10 minutes apart: the second had a warm prefix to read, so it is cold by its own doing
+    late = claude_line(1, 600, read=0, w1h=11_000, inp=6_000, model="claude-opus-5-5", sid="s")
+    t2 = load(str(write_jsonl([late], name="agent-late.jsonl", sub="s/subagents")), "claude")
+    assert subagent_starts([t, t2], price_for).staggerable == 0

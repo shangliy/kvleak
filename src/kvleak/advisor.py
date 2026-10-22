@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass, field
@@ -36,6 +37,7 @@ DEFAULT_BASE = 25_000
 DEFAULT_MISS_RATE = 0.02  # heavy misses per call in typical interactive use
 MIN_CONTEXT = 100_000  # below this, compaction is not worth losing detail over
 HORIZON = 300  # never assume more than this many calls are still to come
+REMAINING_ESTIMATOR = "median"  # how many calls are still to come: "median" or "mean" of past sessions
 
 
 def profile_path() -> Path:
@@ -64,16 +66,21 @@ class Profile:
                 return hours[key]
         return self.keepalive.get(ttl_label, 0)
 
-    def expected_remaining(self, n: int) -> float:
-        """Median of (L - n) over past sessions longer than n, capped at HORIZON.
+    def expected_remaining(self, n: int, estimator: str = REMAINING_ESTIMATOR) -> float:
+        """Calls still to come after the n-th, from past sessions longer than n, capped at HORIZON.
 
-        The median (not the mean) keeps a few marathon sessions from inflating the
-        estimate. With too little history, fall back to Lindy: remaining ≈ elapsed.
+        `mean` is the expectation of the capped remaining length, Σ_k S(k | L > n)
+        over the empirical survival function, which is what an expected-saving
+        decision wants; `median` ignores the long tail (a few marathon sessions)
+        and is the conservative choice. With too little history, fall back to
+        Lindy: remaining ≈ elapsed.
         """
         i = bisect.bisect_right(self.lengths, n)
         longer = self.lengths[i:]
         if len(longer) < 5:
             return float(min(max(n, 10), HORIZON))
+        if estimator == "mean":
+            return sum(min(length - n, HORIZON) for length in longer) / len(longer)
         return float(min(longer[len(longer) // 2] - n, HORIZON))
 
     @classmethod
@@ -139,8 +146,39 @@ class Advice:
 
 
 def _carry(start: float, growth: float, calls: float, r_eff: float) -> float:
-    """Cost of `calls` more calls whose context starts at `start` and grows linearly."""
+    """Cost of `calls` more calls whose context starts at `start` and grows linearly.
+
+    In a compact-or-not comparison the growth term is the same on both sides and
+    cancels: a one-off compaction saves `(C − S) · r_eff` per remaining call
+    whatever the growth rate. Growth matters for *where* to put the auto-compact
+    threshold instead; see `optimal_window`.
+    """
     return calls * (start + growth * calls / 2) * r_eff
+
+
+def optimal_window(price: Price, ttl: int, growth_per_call: float, miss_rate: float = DEFAULT_MISS_RATE,
+                   base_tokens: int = DEFAULT_BASE, summary_tokens: int = DEFAULT_SUMMARY) -> int:
+    """Closed-form auto-compact window under a sawtooth policy.
+
+    Compact to `S = base + summary` whenever the context reaches `W`, then regrow
+    at `Δc` tokens per call. Each cycle costs one compaction plus the carry of a
+    context averaging `(S + W) / 2` over `(W − S) / Δc` calls, so by the
+    renewal-reward theorem the long-run cost per call is minimised at
+
+        W* = S + sqrt(2 · Δc · K0 / r_eff),   K0 = S · read + summary · (output + write)
+
+    `K0` is the part of a compaction's cost that does not scale with `W` (the
+    `W · read` part contributes only `S · read` to the optimum). It is the
+    economic-order-quantity square-root law: doubling the growth rate widens the
+    window by √2. A cross-check for `tune`'s replay, not a replacement: the
+    replay sees the real miss pattern and the detail lost at each compaction.
+    """
+    s = base_tokens + summary_tokens
+    write = price.write_mult(ttl)
+    r_eff = price.read_mult + miss_rate * (write - price.read_mult)
+    k0 = s * price.read_mult + summary_tokens * (price.output_mult + write)
+    growth = max(growth_per_call, 1.0)
+    return int(s + math.sqrt(2.0 * growth * k0 / max(r_eff, 1e-6)))
 
 
 def advise(

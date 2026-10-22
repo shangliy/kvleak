@@ -17,10 +17,19 @@ model.
 
 ## 2. Find heavy misses
 
-A call is a **heavy miss** when both of these hold:
+A call is a **heavy miss** when the context it rebuilt is at least `--min-miss`
+(default 10k tokens):
 
-* `uncached ≥ --min-miss` (default 10k tokens)
-* `read < uncached` (the call mostly missed)
+```
+rebuilt = min(uncached, max(previous prompt − read, 0))   # first call: uncached, if it mostly missed
+```
+
+The `read` tokens that hit are a prefix of the previous prompt, so at most
+`previous prompt − read` of the context you already had can have been paid for
+again. The rest of `uncached` is new content: a 70k tool result arriving on a
+call that read the whole previous prompt is not a miss, however large it is.
+(Until 0.10 the rule was `uncached ≥ --min-miss and read < uncached`, which
+counted such calls.)
 
 ## 3. Give each miss a cause
 
@@ -29,7 +38,7 @@ Rules are checked in order and the first match wins:
 | cause | rule |
 |---|---|
 | `cold_start` / `subagent_cold_start` | first call of a transcript |
-| `compaction` | a compaction marker comes right before the call |
+| `compaction` | a compaction marker comes right before the call, or the prompt shrank to under 75% of the previous one (from at least 20k): Codex, Gemini CLI and OpenCode write no marker |
 | `model_switch` | the model differs from the previous call's model |
 | `ttl_expiry` | the gap since the previous call is at least the TTL minus 10 s. The TTL is 1 h if the previous writes were mostly 1-hour writes, otherwise 5 min. |
 | `prefix_bust` | everything else: the prefix changed while the cache should still have been warm |
@@ -41,9 +50,9 @@ normal input price. They are converted to dollars only when the model's price
 is known.
 
 ```
-rebuilt  = min(uncached, previous call's prompt size)   # context we already had
+rebuilt  = min(uncached, max(previous prompt − read, 0))  # context we already had (§2)
 eff_rate = (input·1 + write_5m·w5 + write_1h·w1h) / uncached
-leak     = rebuilt · (eff_rate − read_mult)              # paid on top of a cache hit
+leak     = rebuilt · (eff_rate − read_mult)               # paid on top of a cache hit
 ```
 
 New content (a fresh user message, new tool results) is not counted as leak,
@@ -102,13 +111,32 @@ compact  = C · read            # the compaction call reads the whole history
 R*       = compact / ((C − S) · r_eff)
 ```
 
-Remaining calls `R` come from your history: the median of `(L − n)` over past
-sessions longer than the current `n` calls, capped at 300. With too little
-history, the Lindy rule (`R ≈ n`) is used instead. The advisor recommends acting
-when `C ≥ --min-context` (100k by default) and the expected saving over `R`
-calls, with the context still growing at its recent rate, is positive. A
-hand-off (a short doc and a fresh session) uses the same math with a smaller
-`S`.
+Remaining calls `R` come from your history: `(L − n)` over past sessions longer
+than the current `n` calls, capped at 300, summarised by the median (the
+default) or the mean of the capped values, which is the expectation under the
+empirical survival function (`REMAINING_ESTIMATOR`). With too little history,
+the Lindy rule (`R ≈ n`) is used instead. The advisor recommends acting when
+`C ≥ --min-context` (100k by default) and the expected saving over `R` calls is
+positive. The context's growth rate does not enter that comparison: both
+branches grow the same way, so a one-off compaction saves `(C − S) · r_eff` per
+remaining call whatever the rate. A hand-off (a short doc and a fresh session)
+uses the same math with a smaller `S`.
+
+**Where the auto-compact threshold belongs.** Growth matters for the repeated
+policy instead. Under "compact to `S` whenever the context reaches `W`, then
+regrow at `Δc` per call", each cycle costs one compaction plus the carry of a
+context averaging `(S + W) / 2` over `(W − S) / Δc` calls, and the renewal-reward
+theorem gives the long-run cost per call its minimum at
+
+```
+W* = S + sqrt(2 · Δc · K0 / r_eff),   K0 = S · read + summary · (output + write)
+```
+
+the economic-order-quantity square-root law: doubling the growth rate widens
+the window by √2. `kvleak advise` prints `W*` for the session's own growth
+rate; `kvleak tune` prints it next to the replayed optimum as a cross-check.
+The replay wins when they differ: it sees the real miss pattern and the detail
+lost at each compaction, which the closed form does not.
 
 **Cold cache.** When the TTL has already expired, the next message rewrites
 the whole context at the write price, and a compaction reads it once at the
@@ -286,6 +314,21 @@ call and Bash result tokens per call (§8). Change is `(after − before) /
 before`. The 30-day projection is `(input per call before − after) × after
 calls × 30 / after days`. Nothing is replayed; both sides are what was
 billed.
+
+**Like with like.** The 80th call of a session carries far more context than
+the 5th, so a week of short sessions after `tune --apply` looks like a saving
+on its own, and a long one looks like a loss. Each call is therefore also
+binned by `(model, call depth: 1–10, 11–25, 26–50, 51–100, >100)` and the
+change in input dollars per call is split the Oaxaca–Blinder way:
+
+```
+Ȳ_after − Ȳ_before = Σ_g w_g,before · (Y_g,after − Y_g,before)   # policy: same kind of call, new price
+                   + Σ_g (w_g,after − w_g,before) · Y_g,after    # mix: the work itself shifted
+```
+
+`probe` prints both terms and projects the policy term alone
+(`projected_saving_30d_adjusted_usd` in `--json`). Strata that exist on one
+side only count as mix.
 
 ## 14. Skills: the listing and the bodies
 

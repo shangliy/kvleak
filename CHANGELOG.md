@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.0 (2026-10-22)
+
+Five corrections to the arithmetic, each from an outside audit of the code, each with a test.
+
+- **Rebuilt context now respects the prefix.** `rebuilt = min(uncached, max(previous prompt − read, 0))`:
+  the tokens that hit are a prefix of the previous prompt, so a large tool result arriving on a call that
+  read everything it had before is new content, not a miss. Tool-heavy histories lose their false
+  positives (Gemini CLI sessions were the worst hit); on the maintainer's Claude Code history the leak
+  moves by under 0.1%. Partial prefix hits now count only the part that was lost.
+- **Compactions without a marker are recognised.** Codex CLI, Gemini CLI and OpenCode do not record
+  compactions; a prompt that shrinks to under 75% of the previous one (from 20k or more) is labelled
+  `compaction` instead of `prefix_bust`.
+- **Hooks: stderr gets the budget stdout does not use.** A failing test suite prints nothing on stdout and
+  every traceback on stderr; the fixed one-third cap cut the tracebacks and made the model re-run the
+  command (the `hooks` arm of `bench/` round 2 was +7% calls, +3% cost on exactly that task).
+- **Gemini models are priced.** Gemini 4 Argon, 3.8/3.6/3.5/3.1/3 Flash and Flash-Lite, 3.1 Pro, 2.5 Pro,
+  Flash and Flash-Lite, with no write premium and 5–10% cached reads, so `whatif`, `keepalive` and the
+  dollar columns work on Gemini CLI histories. The 200k price cliff on the Pro tiers is not modelled.
+- **Keep-alive budgets for unpriced models.** `keepalive` ranked ping counts by dollars and so recommended
+  0 pings for any model without a price; it now ranks by base-equivalent tokens when there are no dollars.
+- **Subagent staggering counts only followers.** A subagent launched on its own has no sibling whose
+  prefix it could have read; only cold starts within 120 s of a sibling's launch count towards the
+  `tune` stagger saving (`staggerable` in the output).
+- **`probe` compares like with like.** Calls are binned by model and call depth (1–10, 11–25, 26–50,
+  51–100, over 100) and the change in input dollars per call is split Oaxaca–Blinder style into the
+  part the same kind of call got cheaper (the settings' doing) and the part the work itself shifted;
+  the adjusted 30-day projection is printed and in `--json`.
+- **Closed-form auto-compact window.** `W* = S + sqrt(2 · Δc · K0 / r_eff)`, the renewal-reward optimum
+  for a compact-at-W policy (square-root law: twice the growth rate, √2 the window). `advise` prints
+  it for the session's growth rate; `tune` prints it next to the replayed optimum as a cross-check.
+  The advisor's expected-remaining-calls estimator can be the mean of the survival-capped lengths as
+  well as the median (`REMAINING_ESTIMATOR`); on the maintainer's history the backtest is identical
+  either way, so the median stays the default.
+
 ## 0.10.1 (2026-10-21)
 
 - `kvleak --card card.png`: a shareable card of the audit (headline numbers, top three causes, concentration).

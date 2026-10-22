@@ -194,3 +194,17 @@ def test_refine_gating_and_cli(write_jsonl, tmp_path, monkeypatch, capsys):
     assert main(["refine", "--path", root, "--probe", "--no-color"]) == 0  # too few sessions since: says so, exit 0
     assert "probe needs 3" in capsys.readouterr().out
     assert main(["refine", "--remove", "--file", str(target)]) == 0 and "kvleak" not in target.read_text()
+
+
+def test_post_tool_gives_stderr_the_budget_stdout_does_not_use(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    err = "\n".join("FAILED test_%d - AssertionError" % i for i in range(300))
+    err += "\nTraceback (most recent call last):\n  boom\nValueError: the real reason"
+    out = hooks.hook_post_tool(_payload("", err), 4000)
+    upd = out["hookSpecificOutput"]["updatedToolOutput"]
+    assert upd["stdout"] == ""
+    assert len(upd["stderr"]) > 4000 // 3 and "ValueError: the real reason" in upd["stderr"]
+    # a long stdout still leaves stderr its third
+    out = hooks.hook_post_tool(_payload("x" * 20_000, err, tid="toolu_2"), 4000)
+    upd = out["hookSpecificOutput"]["updatedToolOutput"]
+    assert len(upd["stderr"]) <= 4000 // 3 + 400 and len(upd["stdout"]) <= 4000

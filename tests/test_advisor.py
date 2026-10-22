@@ -1,9 +1,9 @@
 from conftest import claude_line
 
 from kvleak import load
-from kvleak.advisor import Profile, advise, advise_steps, backtest
+from kvleak.advisor import Profile, advise, advise_steps, backtest, optimal_window
 from kvleak.cli import main
-from kvleak.pricing import TTL_1H, price_for
+from kvleak.pricing import TTL_1H, TTL_5M, price_for
 
 
 def test_breakeven_formula():
@@ -56,3 +56,17 @@ def test_advise_cli(write_jsonl, tmp_path, monkeypatch, capsys):
     assert "pays off after" in out and "→" in out
     assert main(["advise", "--backtest", "--path", str(p.parent), "--no-color"]) == 0
     assert "compactions" in capsys.readouterr().out
+
+
+def test_optimal_window_square_root_law():
+    p = price_for("claude-opus-5-5")
+    s = 33_000
+    w1, w2 = optimal_window(p, TTL_1H, 2_000, 0.02), optimal_window(p, TTL_1H, 4_000, 0.02)
+    assert abs((w2 - s) / (w1 - s) - 2 ** 0.5) < 0.01  # doubling the growth rate widens the window by sqrt 2
+    assert w1 > s and optimal_window(p, TTL_5M, 2_000, 0.02) > s
+
+
+def test_expected_remaining_mean_sees_the_tail():
+    prof = Profile(sorted([10, 20, 30, 40, 50, 5000]))
+    assert prof.expected_remaining(5, "median") == 35
+    assert abs(prof.expected_remaining(5, "mean") - (5 + 15 + 25 + 35 + 45 + 300) / 6) < 1e-9

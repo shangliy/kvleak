@@ -169,6 +169,31 @@ def _ttl_of(step: Step) -> int:
     return TTL_1H if step.write_1h > step.write_5m else TTL_5M
 
 
+SHRINK_MIN_PROMPT = 20_000  # a prompt at least this big that then loses a quarter or more was compacted
+SHRINK_RATIO = 0.75
+
+
+def rebuilt_tokens(prev: Optional[Step], step: Step) -> int:
+    """How much of the context we already had was paid for again on this call.
+
+    The `read` tokens that hit are a prefix of the previous prompt, so at most
+    `prev.prompt − read` of it can have been rebuilt; whatever else is uncached
+    is new content (a tool result, a user message) that is written either way.
+    A first call that mostly hit (a subagent reading a sibling's prefix) rebuilt
+    nothing.
+    """
+    if prev is None:
+        return step.uncached if step.read < step.uncached else 0
+    return min(step.uncached, max(prev.prompt - step.read, 0))
+
+
+def looks_compacted(prev: Step, step: Step) -> bool:
+    """Context shrank sharply mid-session without a marker: Codex, Gemini CLI and
+    OpenCode do not record their compactions, so a prompt that lost a quarter
+    or more of its size is treated as one."""
+    return prev.prompt >= SHRINK_MIN_PROMPT and step.prompt < SHRINK_RATIO * prev.prompt
+
+
 def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss]:
     misses = []
     prev: Optional[Step] = None
@@ -178,13 +203,14 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
             current_ttl = _ttl_of(step)
         else:
             current_ttl = ttl
-        heavy = step.uncached >= min_miss_tokens and step.read < step.uncached
+        rebuilt = rebuilt_tokens(prev, step)
+        heavy = rebuilt >= min_miss_tokens
         if heavy:
             price = price_for(step.model)
             gap = (step.ts - prev.ts).total_seconds() if (prev and step.ts and prev.ts) else None
             if prev is None:
                 cause = "subagent_cold_start" if transcript.is_subagent else "cold_start"
-            elif step.after_compaction:
+            elif step.after_compaction or looks_compacted(prev, step):
                 cause = "compaction"
             elif prev.model and step.model and prev.model != step.model:
                 cause = "model_switch"
@@ -192,7 +218,6 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
                 cause = "ttl_expiry"
             else:
                 cause = "prefix_bust"
-            rebuilt = step.uncached if prev is None else min(step.uncached, prev.prompt)
             eff_write = step_cost(Step(None, None, step.input, step.write_5m, step.write_1h), price) / step.uncached
             penalty = max(rebuilt * (eff_write - price.read_mult), 0.0)
             miss = Miss(

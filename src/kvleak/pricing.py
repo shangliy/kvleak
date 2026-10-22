@@ -80,6 +80,19 @@ BUILTIN: Dict[str, Price] = {
         Price("gpt-5.6-luna", 0.20, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=6.0),
         Price("gpt-5.6-sol", 5.00, read_mult=0.1, write_5m_mult=1.25, write_1h_mult=1.25, output_mult=6.0),
         Price("gpt-5", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0),
+        # Google (Gemini CLI): implicit caching, no write premium, cached reads 5–10% of input
+        # (ai.google.dev/gemini-api/docs/pricing, Oct 2026). The Pro tiers double above 200k
+        # context; that cliff is not modelled, so long Pro prompts are priced low.
+        Price("gemini-4-argon", 2.00, read_mult=0.05, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
+        Price("gemini-3.8-flash", 0.75, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
+        Price("gemini-3.6-flash", 0.75, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
+        Price("gemini-3.5-flash-lite", 0.30, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.3),
+        Price("gemini-3.1-flash-lite", 0.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
+        Price("gemini-3.1-pro", 2.00, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
+        Price("gemini-3-flash", 0.50, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
+        Price("gemini-2.5-pro", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0),
+        Price("gemini-2.5-flash-lite", 0.10, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=4.0),
+        Price("gemini-2.5-flash", 0.30, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.3),
     ]
 }
 

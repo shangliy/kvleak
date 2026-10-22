@@ -120,3 +120,15 @@ def test_by_hour_budget_and_profile_lookup(write_jsonl, tmp_path, monkeypatch):
     assert prof.ping_budget("5m", None) == overall["5m"]
     prof.save()
     assert Profile.load().keepalive_hours == per_hour
+
+
+def test_budget_without_a_dollar_price_still_recommends_pings(write_jsonl):
+    ts = []
+    for i in range(8):
+        lines = [claude_line(0, 0, w5=200_000, model="mystery-model", sid="u%d" % i),
+                 claude_line(1, 480, read=200_000, w5=2_000, model="mystery-model", sid="u%d" % i),
+                 claude_line(2, 540, read=202_000, w5=2_000, model="mystery-model", sid="u%d" % i)]
+        ts.append(load(str(write_jsonl(lines, name="u%d.jsonl" % i))))
+    b = budget(pauses(ts, now=NOW), price_for, TTL_5M)
+    assert not b.priced and all(r.saving_usd == 0 for r in b.rows)
+    assert b.best.pings == 1 and b.recommended == 1 and b.rows[1].saving > 0

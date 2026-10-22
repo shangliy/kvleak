@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .pricing import Price
 from .sources import Transcript
@@ -67,6 +67,7 @@ class Snapshot:
     compactions_per_session: float = 0.0
     carry_usd_per_call: float = 0.0  # diet's carried cost, interactive sessions
     bash_tokens_per_call: float = 0.0
+    strata: Dict[str, List[float]] = field(default_factory=dict)  # "model|depth" → [calls, input usd]
 
     @property
     def input_per_call(self) -> float:
@@ -104,6 +105,7 @@ def snapshot(transcripts: Sequence[Transcript], start: float, end: float, miss_r
     snap.input_usd = r.cost_usd
     snap.bill_usd = r.cost_usd + r.output_usd
     snap.leak_share = r.leak_fraction()
+    snap.strata = strata(main)
     main_calls = sum(len(t.steps) for t in main)
     if main_calls:
         snap.context_per_call = sum(s.prompt for t in main for s in t.steps) / main_calls
@@ -144,18 +146,85 @@ def contrast(before: Snapshot, after: Snapshot) -> List[Row]:
     return [Row(label, float(getattr(before, attr)), float(getattr(after, attr)), kind) for label, attr, kind in ROWS]
 
 
-def projected_saving_30d(before: Snapshot, after: Snapshot) -> float:
-    """What the after-side per-call input price, at the after-side call rate, is worth per 30 days."""
+DEPTH_BUCKETS = (10, 25, 50, 100)  # call depth within a session: 1–10, 11–25, 26–50, 51–100, over 100
+
+
+def depth_bucket(call_index: int) -> int:
+    for b in DEPTH_BUCKETS:
+        if call_index <= b:
+            return b
+    return 10**6
+
+
+def strata(transcripts: Sequence[Transcript]) -> Dict[str, List[float]]:
+    """Calls and input dollars per (model, call-depth bucket).
+
+    The 80th call of a session carries far more context than the 5th, so a
+    week of short sessions after `tune --apply` would look like a saving even
+    if nothing changed. Comparing like with like takes that out.
+    """
+    from .analyze import step_cost
+    from .pricing import price_for
+
+    out: Dict[str, List[float]] = {}
+    for t in transcripts:
+        for i, s in enumerate(t.steps, 1):
+            p = price_for(s.model)
+            key = "{}|{}".format(s.model or "?", depth_bucket(i))
+            cell = out.setdefault(key, [0, 0.0])
+            cell[0] += 1
+            cell[1] += p.usd(step_cost(s, p)) or 0.0
+    return out
+
+
+def decompose(before: Dict[str, List[float]], after: Dict[str, List[float]]) -> Tuple[float, float]:
+    """Split the change in input dollars per call into (policy, mix).
+
+    Oaxaca–Blinder: with `w` the share of calls and `Y` the dollars per call in
+    each stratum, `Ȳ₁ − Ȳ₀ = Σ w₀ (Y₁ − Y₀) + Σ (w₁ − w₀) Y₁`. The first sum is
+    what the same kind of call now costs (the policy's effect, at the before-side
+    mix); the second is the work itself shifting between kinds of call. Strata
+    present on one side only count as mix.
+    """
+    n0 = sum(c for c, _ in before.values())
+    n1 = sum(c for c, _ in after.values())
+    if not n0 or not n1:
+        return 0.0, 0.0
+    policy = mix = 0.0
+    for g in set(before) | set(after):
+        c0, u0 = before.get(g, (0, 0.0))
+        c1, u1 = after.get(g, (0, 0.0))
+        w0, w1 = c0 / n0, c1 / n1
+        if c0 and c1:
+            y0, y1 = u0 / c0, u1 / c1
+            policy += w0 * (y1 - y0)
+            mix += (w1 - w0) * y1
+        elif c1:
+            mix += w1 * u1 / c1
+        else:
+            mix -= w0 * u0 / c0
+    return policy, mix
+
+
+def projected_saving_30d(before: Snapshot, after: Snapshot, per_call: Optional[float] = None) -> float:
+    """What a per-call input saving, at the after-side call rate, is worth per 30 days.
+
+    Default: the raw difference in input dollars per call. Pass the policy part of
+    `decompose` (negated) to project only the change the settings can claim."""
     if not after.calls or after.days <= 0:
         return 0.0
-    per_call = before.input_per_call - after.input_per_call
+    if per_call is None:
+        per_call = before.input_per_call - after.input_per_call
     return per_call * after.calls * (30.0 / after.days)
 
 
 def to_dict(before: Snapshot, after: Snapshot, at: float, events: Sequence[dict]) -> Dict:
+    policy, mix = decompose(before.strata, after.strata)
     return {"applied_at": at, "events": list(events), "before": asdict(before), "after": asdict(after),
             "rows": [{"label": r.label, "before": r.before, "after": r.after, "delta": r.delta} for r in contrast(before, after)],
-            "projected_saving_30d_usd": projected_saving_30d(before, after)}
+            "projected_saving_30d_usd": projected_saving_30d(before, after),
+            "policy_effect_per_call_usd": policy, "mix_effect_per_call_usd": mix,
+            "projected_saving_30d_adjusted_usd": projected_saving_30d(before, after, -policy)}
 
 
 PriceFor = Callable[[Optional[str]], Price]

@@ -172,7 +172,10 @@ def hook_post_tool(payload: dict, max_chars: int = DEFAULT_MAX_CHARS) -> Optiona
         f.write(stdout)
         if stderr:
             f.write("\n--- stderr ---\n" + stderr)
-    err_budget = min(len(stderr), max_chars // 3) if stderr else 0
+    # One budget for both streams: stderr gets at least a third, plus whatever stdout does not
+    # need. A failing test suite prints nothing on stdout and every traceback on stderr; capping
+    # stderr at a third there cut the tracebacks and made the model re-run the command.
+    err_budget = min(len(stderr), max(max_chars // 3, max_chars - len(stdout))) if stderr else 0
     out_view, _ = condense(stdout, max(max_chars - err_budget, 1_000), str(path))
     err_view, _ = condense(stderr, max(err_budget, 500), str(path)) if stderr else ("", None)
     updated = dict(resp)
