@@ -42,6 +42,23 @@ Rules are checked in order and the first match wins:
 | `model_switch` | the model differs from the previous call's model |
 | `ttl_expiry` | the gap since the previous call is at least the TTL minus 10 s. The TTL is 1 h if the previous writes were mostly 1-hour writes, otherwise 5 min. |
 | `prefix_bust` | everything else: the prefix changed while the cache should still have been warm |
+| `tools_changed` / `system_changed` / `server_unavailable` | only from the API's own verdict (next paragraph) |
+
+**The API's verdict.** Claude Code records the Messages API's cache diagnostics on
+every assistant message (`message.diagnostics.cache_miss_reason`, Claude Code
+2.1.26x and later). Its `type` is one of `previous_message_not_found`,
+`unavailable`, `model_changed`, `messages_changed`, `tools_changed`,
+`system_changed`, and the `*_changed` kinds carry `cache_missed_input_tokens`.
+When present, that count replaces the `rebuilt` estimate, and a specific verdict
+overrides the inferred cause: `model_changed` → `model_switch`, `tools_changed`
+and `system_changed` are their own causes, `unavailable` is `server_unavailable`
+(not the user's doing), and `messages_changed` is a compaction if one was seen,
+otherwise a prefix bust. `previous_message_not_found` only says the prefix was
+not in the cache, which is what an expiry, a compaction and a cold start all look
+like from the server, so the inferred cause stands. On the maintainer's 30 days,
+177 of 177 inferred TTL expiries carried that verdict, and the five
+`model_changed` verdicts matched the inferred model switches. The report says how
+many misses carry a verdict.
 
 ## 4. Price each miss
 

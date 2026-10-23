@@ -6,8 +6,9 @@ import pytest
 T0 = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def claude_line(i, at, read=0, w5=0, w1h=0, inp=3, out=200, model="claude-sonnet-5", sid="sess-1", dup=False):
-    return {
+def claude_line(i, at, read=0, w5=0, w1h=0, inp=3, out=200, model="claude-sonnet-5", sid="sess-1", dup=False, diag=None):
+    """`diag`: the API's cache_miss_reason dict Claude Code records under message.diagnostics."""
+    line = {
         "type": "assistant",
         "sessionId": sid,
         "cwd": "/home/me/src/demo-app",
@@ -25,6 +26,9 @@ def claude_line(i, at, read=0, w5=0, w1h=0, inp=3, out=200, model="claude-sonnet
             },
         },
     }
+    if diag is not None:
+        line["message"]["diagnostics"] = {"cache_miss_reason": diag}
+    return line
 
 
 @pytest.fixture

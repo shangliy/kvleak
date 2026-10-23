@@ -14,6 +14,9 @@ from .sources import Step, Transcript
 CAUSES = {
     "ttl_expiry": "Idle gap outlived the cache TTL",
     "prefix_bust": "Prefix changed within the TTL",
+    "tools_changed": "Tool definitions changed",
+    "system_changed": "System prompt changed",
+    "server_unavailable": "Cache unavailable (server side)",
     "model_switch": "Model switched mid-session",
     "compaction": "History compacted / rewritten",
     "cold_start": "New session cold start",
@@ -36,6 +39,7 @@ class Miss:
     ts: Optional[str]
     model: Optional[str]
     cause: str
+    api_reason: Optional[str]  # the API's own cache_miss_reason when Claude Code recorded one
     gap_s: Optional[float]
     uncached: int
     rebuilt: int  # part of `uncached` that was already-seen context
@@ -89,6 +93,7 @@ class Report:
     no_cache_cost: float = 0.0  # what input would have cost with no caching at all
     no_cache_cost_usd: float = 0.0
     unpriced_steps: int = 0
+    api_diagnosed: int = 0  # misses whose call carried the API's own cache_miss_reason
     model_mix: Dict[str, int] = field(default_factory=dict)
     sources: Dict[str, int] = field(default_factory=dict)  # which tool wrote the sessions: claude, codex, …
     buckets: Dict[str, Dict[str, float]] = field(default_factory=dict)
@@ -194,6 +199,30 @@ def looks_compacted(prev: Step, step: Step) -> bool:
     return prev.prompt >= SHRINK_MIN_PROMPT and step.prompt < SHRINK_RATIO * prev.prompt
 
 
+API_CAUSE = {
+    "model_changed": "model_switch",
+    "tools_changed": "tools_changed",
+    "system_changed": "system_changed",
+    "unavailable": "server_unavailable",
+}
+
+
+def api_cause(step: Step, inferred: str) -> str:
+    """Let the API's recorded verdict override the inferred cause where it is more specific.
+
+    `previous_message_not_found` only says the prefix was not in the cache, which is what
+    every expiry, compaction and cold start looks like from the server, so the inferred
+    cause (which knows the gap and the markers) stands. `messages_changed` is a rewrite of
+    history: a compaction if one was seen, otherwise a prefix bust.
+    """
+    reason = step.miss_reason
+    if not reason:
+        return inferred
+    if reason == "messages_changed":
+        return "compaction" if inferred == "compaction" else "prefix_bust"
+    return API_CAUSE.get(reason, inferred)
+
+
 def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss]:
     misses = []
     prev: Optional[Step] = None
@@ -204,9 +233,11 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
         else:
             current_ttl = ttl
         rebuilt = rebuilt_tokens(prev, step)
+        if step.missed:  # the API counted what it could have read from cache; trust that over the estimate
+            rebuilt = min(step.uncached, step.missed)
         heavy = rebuilt >= min_miss_tokens
         if heavy:
-            price = price_for(step.model)
+            price = price_for(step.model).at(step.prompt)
             gap = (step.ts - prev.ts).total_seconds() if (prev and step.ts and prev.ts) else None
             if prev is None:
                 cause = "subagent_cold_start" if transcript.is_subagent else "cold_start"
@@ -218,6 +249,7 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
                 cause = "ttl_expiry"
             else:
                 cause = "prefix_bust"
+            cause = api_cause(step, cause)
             eff_write = step_cost(Step(None, None, step.input, step.write_5m, step.write_1h), price) / step.uncached
             penalty = max(rebuilt * (eff_write - price.read_mult), 0.0)
             miss = Miss(
@@ -228,6 +260,7 @@ def classify(transcript: Transcript, min_miss_tokens: int = 10_000) -> List[Miss
                 ts=step.ts.isoformat() if step.ts else None,
                 model=step.model,
                 cause=cause,
+                api_reason=step.miss_reason,
                 gap_s=round(gap, 1) if gap is not None else None,
                 uncached=step.uncached,
                 rebuilt=rebuilt,
@@ -275,7 +308,7 @@ def analyze(
         s = SessionStats(t.session_id, t.project, t.path, t.is_subagent, [])
         seen_models: Dict[str, None] = {}
         for step in t.steps:
-            price = price_for(step.model)
+            price = price_for(step.model).at(step.prompt)
             cost = step_cost(step, price)
             r.steps += 1
             r.input += step.input
@@ -316,6 +349,7 @@ def analyze(
             p = price_for(m.model)
             r.keepalive_saving_usd += p.usd(m.keepalive_saving) or 0.0
             s.misses += 1
+            r.api_diagnosed += int(bool(m.api_reason))
             s.penalty += m.penalty
             s.penalty_usd += m.penalty_usd or 0.0
             r.misses.append(m)
@@ -380,6 +414,23 @@ def recommendations(r: Report) -> List[str]:
                 "The prompt prefix is changing between calls. Look for timestamps, random IDs, unsorted JSON "
                 "(`json.dumps(..., sort_keys=True)`), or tool lists that change order in system prompts, "
                 "CLAUDE.md, hooks and MCP servers."
+            )
+        elif cause == "tools_changed":
+            tips.append(
+                "The API confirms the tool set changed mid-session: an MCP server connecting or dropping, a deny rule on a "
+                "whole tool, a plugin reload, or a tool loaded again after compaction. Claude Code 2.1.302 and later keep the "
+                "tool list fixed when tool search is on; `/reload-plugins` warns before a full re-read."
+            )
+        elif cause == "system_changed":
+            tips.append(
+                "The API confirms the system prompt changed mid-session: a different `--append-system-prompt` on resume, "
+                "a Claude Code upgrade applied to a resumed conversation at its first compaction, or project context that "
+                "changed on disk. Pick these at session start."
+            )
+        elif cause == "server_unavailable":
+            tips.append(
+                "The API reported its cache as unavailable for these calls. Nothing on your side causes this; "
+                "it is listed so it is not mistaken for a prefix bust."
             )
         elif cause == "model_switch":
             tips.append(

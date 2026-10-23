@@ -144,3 +144,41 @@ def test_cause_table_shows_the_size_of_a_typical_rebuild(write_jsonl, capsys):
     assert "per miss" in out and "51.0k" in out
     tip = next(t for t in recommendations(r) if t.startswith("New sessions start cold"))
     assert "rebuild a median 5" in tip and "Every 10k" in tip
+
+
+def test_api_diagnosis_overrides_the_inferred_cause_and_size(write_jsonl):
+    """Claude Code records the API's cache_miss_reason; tools_changed with a token count beats a guess."""
+    lines = [
+        claude_line(0, 0, w5=50_000),
+        claude_line(1, 10, read=50_000, w5=1_000),
+        claude_line(2, 20, read=20_000, w5=31_000, diag={"type": "tools_changed", "cache_missed_input_tokens": 30_000}),
+        claude_line(3, 30, read=10_000, w5=42_000, diag={"type": "unavailable"}),
+        claude_line(4, 40, read=52_000, w5=500, diag={"type": "previous_message_not_found"}),
+    ]
+    t = load(str(write_jsonl(lines)))
+    assert t.steps[2].miss_reason == "tools_changed" and t.steps[2].missed == 30_000
+    misses = {m.step_index: m for m in classify(t)}
+    assert misses[2].cause == "tools_changed" and misses[2].rebuilt == 30_000 and misses[2].api_reason == "tools_changed"
+    assert misses[3].cause == "server_unavailable"
+    assert 4 not in misses  # a hit with a verdict attached is still a hit
+    r = analyze([t])
+    assert r.api_diagnosed == 2 and r.buckets["tools_changed"]["count"] == 1
+
+
+def test_diagnosis_on_a_later_content_block_is_kept(write_jsonl):
+    first = claude_line(0, 0, w5=50_000)
+    second = claude_line(1, 10, read=10_000, w5=41_000)
+    dup = claude_line(1, 10, read=10_000, w5=41_000, diag={"type": "system_changed", "cache_missed_input_tokens": 40_000})
+    t = load(str(write_jsonl([first, second, dup])))
+    assert len(t.steps) == 2 and t.steps[1].miss_reason == "system_changed"
+    assert classify(t)[-1].cause == "system_changed"
+
+
+def test_prices_sonnet_55_opus_41_and_the_haiku_cliff():
+    assert price_for("claude-sonnet-5-5").read_mult == 0.05 and price_for("claude-sonnet-5").read_mult == 0.1
+    assert price_for("claude-opus-4-1-20250805").input_per_mtok == 15.0
+    assert price_for("claude-opus-4-20250514").input_per_mtok == 15.0
+    assert price_for("claude-opus-4-8").input_per_mtok == 5.0
+    haiku = price_for("claude-haiku-5-5")
+    assert haiku.at(90_000).input_per_mtok == 0.10 and haiku.at(150_000).input_per_mtok == 0.50
+    assert price_for("gemini-2.5-pro").at(250_000).input_per_mtok == 2.5

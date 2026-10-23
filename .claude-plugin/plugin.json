@@ -1,6 +1,6 @@
 {
   "name": "kvleak",
-  "version": "0.11.3",
+  "version": "0.12.0",
   "description": "Cut Claude Code token cost: audit where your prompt-cache money leaks (idle gaps, cold starts, prefix busts), price every popular token-saver on your own bill, and fix most of it with one settings change. Local files only, no API key, zero dependencies.",
   "author": {
     "name": "kvleak contributors"

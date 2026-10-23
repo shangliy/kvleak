@@ -53,6 +53,8 @@ Claude Code already has the settings that fix most of the leak: compaction windo
 
 `kvleak tune` replays your 30 days under every value. `--apply` writes the winners. −45% input spend on mine.
 
+github.com/shangliy/kvleak. If it's useful, a star helps others find it.
+
 ---
 
 **6 · Lunch is expensive**
@@ -98,3 +100,4 @@ kvleak:
 3 seconds to find out what your agent really costs:
 `uvx kvleak`
 Post yours: github.com/shangliy/kvleak/issues/1
+And if it found something, a ⭐ on the repo helps it reach more people.

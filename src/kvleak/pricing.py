@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -36,6 +36,14 @@ class Price:
     write_5m_mult: float = WRITE_5M
     write_1h_mult: float = WRITE_1H
     output_mult: float = 5.0  # output price / input price (5x for every current Claude model)
+    cliff_tokens: Optional[int] = None  # prompts longer than this are billed at cliff_mult x (every line)
+    cliff_mult: float = 1.0
+
+    def at(self, prompt_tokens: int) -> "Price":
+        """The price that applies to a call with this many prompt tokens (long-context cliffs)."""
+        if self.cliff_tokens is None or self.input_per_mtok is None or prompt_tokens <= self.cliff_tokens:
+            return self
+        return replace(self, input_per_mtok=self.input_per_mtok * self.cliff_mult)
 
     def usd(self, base_equiv_tokens: float) -> Optional[float]:
         if self.input_per_mtok is None:
@@ -66,12 +74,15 @@ BUILTIN: Dict[str, Price] = {
         Price("claude-fable-5", 10.00),
         Price("claude-opus-5-5", 4.00, read_mult=0.05),
         Price("claude-opus-5", 5.00),
+        Price("claude-opus-4-1", 15.00),  # Opus 4.1 and the dated Opus 4 id are $15; 4.5 to 4.8 are $5
+        Price("claude-opus-4-20", 15.00),
         Price("claude-opus-4", 5.00),
         Price("claude-opus", 5.00),
+        Price("claude-sonnet-5-5", 2.00, read_mult=0.05),  # cache hits 0.05x on Sonnet 5.5, 0.1x on Sonnet 5
         Price("claude-sonnet-5", 2.00),
         Price("claude-sonnet-4", 3.00),
         Price("claude-sonnet", 3.00),
-        Price("claude-haiku-5-5", 0.10),
+        Price("claude-haiku-5-5", 0.10, cliff_tokens=100_000, cliff_mult=5.0),  # 5x every line past 100k prompt tokens
         Price("claude-haiku-4-5", 1.00),
         Price("claude-haiku", 1.00),
         # OpenAI (Codex CLI): cached input 10% of input, cache writes 1.25× on GPT-5.6 and later, none before.
@@ -82,15 +93,17 @@ BUILTIN: Dict[str, Price] = {
         Price("gpt-5", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0),
         # Google (Gemini CLI): implicit caching, no write premium, cached reads 5–10% of input
         # (ai.google.dev/gemini-api/docs/pricing, Oct 2026). The Pro tiers double above 200k
-        # context; that cliff is not modelled, so long Pro prompts are priced low.
+        # prompt tokens (`cliff_tokens`), applied per call in the audit.
         Price("gemini-4-argon", 2.00, read_mult=0.05, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
         Price("gemini-3.8-flash", 0.75, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
         Price("gemini-3.6-flash", 0.75, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=5.0),
         Price("gemini-3.5-flash-lite", 0.30, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.3),
         Price("gemini-3.1-flash-lite", 0.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
-        Price("gemini-3.1-pro", 2.00, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
+        Price("gemini-3.1-pro", 2.00, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0,
+              cliff_tokens=200_000, cliff_mult=2.0),
         Price("gemini-3-flash", 0.50, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=6.0),
-        Price("gemini-2.5-pro", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0),
+        Price("gemini-2.5-pro", 1.25, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.0,
+              cliff_tokens=200_000, cliff_mult=2.0),
         Price("gemini-2.5-flash-lite", 0.10, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=4.0),
         Price("gemini-2.5-flash", 0.30, read_mult=0.1, write_5m_mult=1.0, write_1h_mult=1.0, output_mult=8.3),
     ]

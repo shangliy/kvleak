@@ -132,3 +132,19 @@ def test_budget_without_a_dollar_price_still_recommends_pings(write_jsonl):
     b = budget(pauses(ts, now=NOW), price_for, TTL_5M)
     assert not b.priced and all(r.saving_usd == 0 for r in b.rows)
     assert b.best.pings == 1 and b.recommended == 1 and b.rows[1].saving > 0
+
+
+def test_statusline_uses_claude_codes_own_rebuild_size_and_miss_tally(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("NO_COLOR", "1")
+    now = 1_000_000.0
+    payload = {
+        "model": {"id": MODEL},
+        "context_window": {"current_usage": {"input_tokens": 10, "cache_read_input_tokens": 50_000}},
+        "prompt_cache": {"ttl": "1h", "warm": True, "expires_at": now + 600, "recache_tokens_if_cold": 80_000,
+                         "misses": 2, "miss_causes": {"tools_changed": 2}},
+    }
+    line = render(payload, now=now)
+    assert "80.0k ctx" in line and "2 misses · tools_changed" in line
+    payload["prompt_cache"]["misses"] = 0
+    assert "miss" not in render(payload, now=now)

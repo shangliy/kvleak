@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional
 
 
 @dataclass
@@ -32,6 +32,10 @@ class Step:
     read: int = 0  # cache hits
     output: int = 0
     after_compaction: bool = False  # history was rewritten just before this call
+    # The API's own verdict on this call's cache miss (Claude Code records `message.diagnostics`):
+    # previous_message_not_found | unavailable | model_changed | messages_changed | tools_changed | system_changed
+    miss_reason: Optional[str] = None
+    missed: Optional[int] = None  # `cache_missed_input_tokens`: what the API says could have been read from cache
 
     @property
     def uncached(self) -> int:
@@ -81,10 +85,20 @@ def default_claude_root() -> Path:
     return Path(base) / "projects" if base else Path.home() / ".claude" / "projects"
 
 
+def _diagnosis(msg: dict):
+    """(reason, missed tokens) from the API's cache diagnostics, when Claude Code recorded them."""
+    diag = msg.get("diagnostics")
+    reason = (diag or {}).get("cache_miss_reason") if isinstance(diag, dict) else None
+    if not isinstance(reason, dict) or not reason.get("type"):
+        return None, None
+    missed = reason.get("cache_missed_input_tokens")
+    return str(reason["type"]), (int(missed) if isinstance(missed, (int, float)) else None)
+
+
 def read_claude(path: str, tail_bytes: Optional[int] = None) -> Transcript:
     """Parse a Claude Code transcript; with `tail_bytes`, only its last N bytes."""
     steps: List[Step] = []
-    seen = set()
+    seen: Dict[tuple, Optional[Step]] = {}
     pending_compaction = False
     cwd = None
     sidechain = "/subagents/" in path.replace(os.sep, "/")
@@ -114,10 +128,14 @@ def read_claude(path: str, tail_bytes: Optional[int] = None) -> Transcript:
                 continue
             # Claude Code writes one line per content block; usage repeats. Dedupe.
             key = (msg.get("id"), obj.get("requestId"))
+            reason, missed = _diagnosis(msg)
             if key != (None, None):
                 if key in seen:
+                    earlier = seen[key]
+                    if earlier is not None and reason and not earlier.miss_reason:
+                        earlier.miss_reason, earlier.missed = reason, missed  # the verdict rode on a later block
                     continue
-                seen.add(key)
+                seen[key] = None
             if obj.get("isSidechain"):
                 sidechain = True
             if cwd is None and obj.get("cwd"):
@@ -137,11 +155,15 @@ def read_claude(path: str, tail_bytes: Optional[int] = None) -> Transcript:
                 read=_int(usage.get("cache_read_input_tokens")),
                 output=_int(usage.get("output_tokens")),
                 after_compaction=pending_compaction,
+                miss_reason=reason,
+                missed=missed,
             )
             if step.prompt == 0 or step.model == "<synthetic>":
                 continue
             pending_compaction = False
             steps.append(step)
+            if key != (None, None):
+                seen[key] = step
     p = Path(path)
     if cwd:
         project = Path(cwd).name or cwd

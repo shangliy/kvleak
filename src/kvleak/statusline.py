@@ -61,6 +61,8 @@ def render(payload: dict, now: Optional[float] = None) -> str:
         ttl = TTL_1H if cache["ttl"] == "1h" else TTL_5M
         cached = sum(int(usage.get(k) or 0) for k in (
             "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"))
+        if isinstance(cache.get("recache_tokens_if_cold"), (int, float)):  # Claude Code's own figure (v2.1.260+)
+            cached = int(cache["recache_tokens_if_cold"])
         expires = cache.get("expires_at")
         left = (float(expires) - now) if (expires and cache.get("warm")) else 0.0
     else:
@@ -73,14 +75,15 @@ def render(payload: dict, now: Optional[float] = None) -> str:
         cached = last.prompt + last.output  # the entry covers what was sent plus what came back
         model = last.model or model
         left = ttl - (now - last.ts.timestamp())
-    price = price_for(model)
+    price = price_for(model).at(cached)
     rebuild = cached * price.write_mult(ttl)
+    tail = _miss_tally(cache)
     cost = usd(price.usd(rebuild)) if price.input_per_mtok is not None else tok(rebuild) + " tok"
     expiring = 0 < left <= PING_HINT_S
     hint = _compact_hint(steps, price, now, cold=left <= 0, expiring=expiring) if cached >= HINT_MIN_CONTEXT else ""
     if left <= 0:
-        return "{} {} · next msg rebuilds {} ({}){}".format(
-            c("○", "red"), c("cache cold", "red", "bold"), tok(cached), cost, hint
+        return "{} {} · next msg rebuilds {} ({}){}{}".format(
+            c("○", "red"), c("cache cold", "red", "bold"), tok(cached), cost, hint, tail
         )
     frac = min(left / ttl, 1.0)
     glyph = RING[min(int(frac * (len(RING) - 1)) + 1, len(RING) - 1)]
@@ -91,9 +94,20 @@ def render(payload: dict, now: Optional[float] = None) -> str:
         # context that costs more to carry than to shrink. Compacting while it is still warm
         # reads the old context at 0.1x; after expiry the same compaction pays the write price.
         hint += _ping_hint(ttl, now)
-    return "{} cache {} · {} ctx · rebuild {}{}".format(
-        c(glyph, color), c(clock, color, "bold"), tok(cached), cost, hint
+    return "{} cache {} · {} ctx · rebuild {}{}{}".format(
+        c(glyph, color), c(clock, color, "bold"), tok(cached), cost, hint, tail
     )
+
+
+def _miss_tally(cache: dict) -> str:
+    """' · 2 misses · tools_changed' from Claude Code's own session statistics (v2.1.260+)."""
+    misses = cache.get("misses")
+    if not isinstance(misses, int) or misses < 1:
+        return ""
+    causes = cache.get("miss_causes") or {}
+    top = max(causes, key=causes.get) if isinstance(causes, dict) and causes else ""
+    s = "{} miss{}".format(misses, "es" if misses > 1 else "") + (" · " + top if top else "")
+    return " · " + c(s, "grey")
 
 
 def _ping_hint(ttl: int, now: float) -> str:

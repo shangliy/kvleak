@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0 (2026-10-22)
+
+- **The API's own miss diagnosis is read from Claude Code transcripts.** Every assistant message carries
+  `message.diagnostics.cache_miss_reason` (Claude Code 2.1.26x+). Its `cache_missed_input_tokens` replaces the
+  rebuilt estimate, `model_changed` confirms a model switch, and three causes exist only from the verdict:
+  `tools_changed`, `system_changed` (what used to be lumped into `prefix_bust`, now with the API's own token
+  count) and `server_unavailable` (the API's cache was down; not the user's doing). The report says how many
+  misses carry a verdict; `kvleak --json` exposes `api_reason` per miss.
+- **Prices.** Sonnet 5.5 cache reads are 0.05x ($0.10/M), not 0.1x; Opus 4 and 4.1 are $15/M, not $5; Haiku 5.5
+  is billed 5x on every line past 100k prompt tokens and Gemini 2.5/3.1 Pro 2x past 200k. `Price.at(prompt)`
+  applies the cliff per call in the audit.
+- **Statusline** uses Claude Code's `recache_tokens_if_cold` for the rebuild size when present and appends the
+  session's miss tally and leading cause from `prompt_cache.miss_causes` (`· 2 misses · tools_changed`).
+
 ## 0.11.3 (2026-10-22)
 
 - **`per miss` column in the cause table** (terminal, HTML, JSON `buckets[cause].rebuilt_median`): the median

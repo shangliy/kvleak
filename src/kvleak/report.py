@@ -12,6 +12,9 @@ SOURCE_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "gemini": "Gemini
 CAUSE_COLOR = {
     "ttl_expiry": "red",
     "prefix_bust": "magenta",
+    "tools_changed": "magenta",
+    "system_changed": "magenta",
+    "server_unavailable": "grey",
     "model_switch": "yellow",
     "compaction": "blue",
     "cold_start": "cyan",
@@ -124,6 +127,9 @@ def render_terminal(r: Report, top_misses: int = 5) -> str:
     line = concentration_line(r)
     if line:
         out.append(c("  " + line, "grey"))
+    if r.api_diagnosed:
+        out.append(c("  {} of {} misses carry the API's own cache_miss_reason (Claude Code records it); "
+                     "their cause and size come from that, not from inference".format(r.api_diagnosed, len(r.misses)), "grey"))
     out.append("")
 
     if r.worst_sessions and r.worst_sessions[0].misses:

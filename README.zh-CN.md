@@ -26,20 +26,20 @@ uvx kvleak            # 或：pipx run kvleak  ·  pip install kvleak
 
 ```text
  kvleak · prompt-cache leak report
- 100 sessions + 309 subagents + 25,420 one-shot runs (Claude Code 83, Codex CLI 17) · 56,746 model calls · 10.0k min miss size
+ 100 sessions + 311 subagents + 25,421 one-shot runs (Claude Code 83, Codex CLI 17) · 56,195 model calls · 10.0k min miss size
 
-  Cache hit rate    94.7%  ██████████████████████▋
-  Input spend        $2,605   caching already saved you $21,310
-  Output spend      $635.13   replies + thinking at the output price · whole bill $3,240: 48.3% cache writes, 30.9% cache reads, 19.6% output
-  Leaked to misses  $619.50   23.8% of input spend went to cache rebuilds and cold starts · 19.1% of the whole bill
-  Recoverable       $114.19   with keep-alive pings (idle ≤ 2h, capped at break-even; `kvleak keepalive` sizes the budget from when you come back)
-  Dead writes       $262.86   write premium on tokens never read back (mostly one-shot `claude -p` runs)
+  Cache hit rate    94.6%  ██████████████████████▋
+  Input spend        $2,641   caching already saved you $21,594
+  Output spend      $641.66   replies + thinking at the output price · whole bill $3,283: 48.4% cache writes, 30.9% cache reads, 19.5% output
+  Leaked to misses  $632.74   24.0% of input spend went to cache rebuilds and cold starts · 19.3% of the whole bill
+  Recoverable       $121.10   with keep-alive pings (idle ≤ 2h, capped at break-even; `kvleak keepalive` sizes the budget from when you come back)
+  Dead writes       $262.91   write premium on tokens never read back (mostly one-shot `claude -p` runs)
 
  Where the leak comes from
   cause                            misses  uncached  per miss     leak  share
-  Idle gap outlived the cache TTL     203     44.3M      135k  $405.64  65.5%  ██████████▍
-  New session cold start            1,980     51.0M     14.2k  $123.10  19.9%  ███▏
-  Subagent cold start                 158      4.5M     28.5k   $31.29   5.1%  ▊
+  Idle gap outlived the cache TTL     215     45.9M      135k  $419.73  66.3%  ██████████▌
+  New session cold start            1,981     51.0M     14.2k  $123.44  19.5%  ███
+  Subagent cold start                 160      4.5M     28.5k   $31.58   5.0%  ▊
 ```
 
 <sub>同一份审计的文字版。只信一个人的历史不够？在 [kenseii1 公开的 945 次运行](docs/launch/kensei-945-analysis.md)上，按它自己日志里的 `costUSD` 计价，`/compact` 让原始 token 少了 40–72%，**账单却多了 14–37%**；子 Agent 少了 3% token，账单多了 30%。</sub>

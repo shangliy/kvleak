@@ -12,6 +12,9 @@ from .fmt import duration, pct, tok, usd
 COLORS = {
     "ttl_expiry": "#e5484d",
     "prefix_bust": "#8e4ec6",
+    "tools_changed": "#b07cd8",
+    "system_changed": "#c89ae6",
+    "server_unavailable": "#8b8d98",
     "model_switch": "#f5a524",
     "compaction": "#3e63dd",
     "cold_start": "#12a594",
